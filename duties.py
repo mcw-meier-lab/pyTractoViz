@@ -195,24 +195,14 @@ def coverage(ctx: Context) -> None:
 
 
 @duty(nofail=PY_VERSION == PY_DEV)
-def test(ctx: Context, *cli_args: str, match: str = "") -> None:  # noqa: PT028
-    """Run the test suite.
-
-    Parameters:
-        match: A pytest expression to filter selected tests.
-    """
+def test(ctx: Context, *cli_args: str) -> None:
+    """Run the test suite."""
     os.environ["COVERAGE_FILE"] = f".coverage.{PY_VERSION}"
     os.environ["PYTHONWARNDEFAULTENCODING"] = "1"
-    config_file = "config/pytest.ini"
-    # YORE: EOL 3.9: Remove block.
-    if sys.version_info[:2] < (3, 10):
-        config_file = "config/pytest_39.ini"
-
     ctx.run(
         tools.pytest(
             "tests",
-            config_file=config_file,
-            select=match,
+            config_file="config/pytest.ini",
             color="yes",
         ).add_args("-n", "auto", *cli_args),
         title=pyprefix("Running tests"),
