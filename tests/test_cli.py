@@ -16,7 +16,8 @@ def test_main() -> None:
 def test_show_help(capsys: pytest.CaptureFixture) -> None:
     """Show help.
 
-    Parameters:
+    Parameters
+    ----------
         capsys: Pytest fixture to capture output.
     """
     with pytest.raises(SystemExit):
@@ -28,7 +29,8 @@ def test_show_help(capsys: pytest.CaptureFixture) -> None:
 def test_show_version(capsys: pytest.CaptureFixture) -> None:
     """Show version.
 
-    Parameters:
+    Parameters
+    ----------
         capsys: Pytest fixture to capture output.
     """
     with pytest.raises(SystemExit):
@@ -40,7 +42,8 @@ def test_show_version(capsys: pytest.CaptureFixture) -> None:
 def test_show_debug_info(capsys: pytest.CaptureFixture) -> None:
     """Show debug information.
 
-    Parameters:
+    Parameters
+    ----------
         capsys: Pytest fixture to capture output.
     """
     with pytest.raises(SystemExit):
