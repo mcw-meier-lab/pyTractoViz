@@ -30,7 +30,8 @@ class _DebugInfo(argparse.Action):
 def get_parser() -> argparse.ArgumentParser:
     """Return the CLI argument parser.
 
-    Returns:
+    Returns
+    -------
         An argparse parser.
     """
     parser = argparse.ArgumentParser(prog="pytractoviz")
@@ -44,10 +45,12 @@ def main(args: list[str] | None = None) -> int:
 
     This function is executed when you type `pytractoviz` or `python -m pytractoviz`.
 
-    Parameters:
+    Parameters
+    ----------
         args: Arguments passed from the command line.
 
-    Returns:
+    Returns
+    -------
         An exit code.
     """
     parser = get_parser()

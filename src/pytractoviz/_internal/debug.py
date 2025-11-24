@@ -59,10 +59,12 @@ def _interpreter_name_version() -> tuple[str, str]:
 def _get_version(dist: str = "pytractoviz") -> str:
     """Get version of the given distribution.
 
-    Parameters:
+    Parameters
+    ----------
         dist: A distribution name.
 
-    Returns:
+    Returns
+    -------
         A version number.
     """
     try:
@@ -74,7 +76,8 @@ def _get_version(dist: str = "pytractoviz") -> str:
 def _get_debug_info() -> _Environment:
     """Get debug/environment information.
 
-    Returns:
+    Returns
+    -------
         Environment information.
     """
     py_name, py_version = _interpreter_name_version()

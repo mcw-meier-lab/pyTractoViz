@@ -1,0 +1,2742 @@
+"""Visualization module for diffusion tractography."""
+
+from __future__ import annotations
+
+import gc
+import logging
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import imageio
+import matplotlib.pyplot as plt
+import nibabel as nib
+import numpy as np
+import vtk
+from dipy.io.stateful_tractogram import Space, StatefulTractogram
+from dipy.io.streamline import load_trk
+from dipy.segment.bundles import bundle_shape_similarity
+from dipy.segment.clustering import QuickBundles
+from dipy.segment.featurespeed import ResampleFeature
+from dipy.segment.metricspeed import AveragePointwiseEuclideanMetric
+from dipy.stats.analysis import afq_profile, assignment_map, gaussian_weights
+from dipy.tracking.streamline import (
+    Streamlines,
+    cluster_confidence,
+    orient_by_streamline,
+    transform_streamlines,
+)
+from dipy.tracking.utils import length
+from fury import actor, window
+from fury.colormap import create_colormap
+from PIL import Image
+from scipy.spatial.transform import Rotation
+
+from pytractoviz.html import create_quality_check_html
+from pytractoviz.utils import (
+    ANATOMICAL_VIEW_ANGLES,
+    calculate_bbox_size,
+    calculate_centroid,
+    calculate_combined_bbox_size,
+    calculate_combined_centroid,
+    calculate_direction_colors,
+    set_anatomical_camera,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class TractographyVisualizationError(Exception):
+    """Base exception for tractography visualization errors."""
+
+
+class InvalidInputError(TractographyVisualizationError):
+    """Raised when input data is invalid."""
+
+
+class TractographyVisualizer:
+    """A class for visualizing diffusion tractography data.
+
+    This class provides methods for loading, processing, and visualizing
+    tractography data, including generating static images, animations, and
+    quality metrics.
+
+    Parameters
+    ----------
+    reference_image : str | Path, optional
+        Path to the reference T1-weighted image. Can be set later via
+        `set_reference_image()`.
+    output_directory : str | Path, optional
+        Default output directory for generated files. Can be set later via
+        `set_output_directory()`.
+    gif_size : tuple[int, int], optional
+        Size of generated GIFs in pixels. Default is (608, 608).
+    gif_duration : float, optional
+        Duration per frame in seconds. Default is 0.2.
+    gif_palette_size : int, optional
+        Color palette size for GIF optimization. Default is 64.
+    gif_frames : int, optional
+        Number of frames in rotation animation. Default is 60.
+    min_streamline_length : float, optional
+        Minimum streamline length for CCI calculation. Default is 40.0.
+    cci_threshold : float, optional
+        Minimum CCI value to keep streamlines. Default is 1.0.
+    afq_resample_points : int, optional
+        Number of points for AFQ resampling. Default is 100.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(
+    ...     reference_image="path/to/t1w.nii.gz", output_directory="output/"
+    ... )
+    >>> visualizer.generate_videos(
+    ...     tract_files=["tract1.trk", "tract2.trk"], ref_file="t1w.nii.gz"
+    ... )
+    """
+
+    def __init__(
+        self,
+        reference_image: str | Path | None = None,
+        output_directory: str | Path | None = None,
+        *,
+        gif_size: tuple[int, int] = (608, 608),
+        gif_duration: float = 0.2,
+        gif_palette_size: int = 64,
+        gif_frames: int = 60,
+        min_streamline_length: float = 40.0,
+        cci_threshold: float = 1.0,
+        afq_resample_points: int = 100,
+    ) -> None:
+        """Initialize the TractographyVisualizer."""
+        self._reference_image: Path | None = None
+        self._output_directory: Path | None = None
+
+        if reference_image is not None:
+            self.set_reference_image(reference_image)
+        if output_directory is not None:
+            self.set_output_directory(output_directory)
+
+        self.gif_size = gif_size
+        self.gif_duration = gif_duration
+        self.gif_palette_size = gif_palette_size
+        self.gif_frames = gif_frames
+        self.min_streamline_length = min_streamline_length
+        self.cci_threshold = cci_threshold
+        self.afq_resample_points = afq_resample_points
+
+    def set_reference_image(self, reference_image: str | Path) -> None:
+        """Set the reference T1-weighted image.
+
+        Parameters
+        ----------
+        reference_image : str | Path
+            Path to the reference image file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the reference image file does not exist.
+        """
+        ref_path = Path(reference_image)
+        if not ref_path.exists():
+            raise FileNotFoundError(f"Reference image not found: {reference_image}")
+        self._reference_image = ref_path
+
+    def set_output_directory(self, output_directory: str | Path) -> None:
+        """Set the output directory for generated files.
+
+        Parameters
+        ----------
+        output_directory : str | Path
+            Path to the output directory. Will be created if it doesn't exist.
+
+        Raises
+        ------
+        OSError
+            If the directory cannot be created.
+        """
+        out_dir = Path(output_directory)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self._output_directory = out_dir
+
+    @property
+    def reference_image(self) -> Path | None:
+        """Get the current reference image path."""
+        return self._reference_image
+
+    @property
+    def output_directory(self) -> Path | None:
+        """Get the current output directory path."""
+        return self._output_directory
+
+    def get_glass_brain(self, t1w_img: str | Path | None = None) -> actor.Actor:
+        """Get the glass brain actor for the T1-weighted image.
+
+        Parameters
+        ----------
+        t1w_img : str | Path | None, optional
+            Path to the T1-weighted image. If None, uses the reference image
+            set during initialization or via `set_reference_image()`.
+
+        Returns
+        -------
+        actor.Actor
+            The glass brain actor.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the image file is not found.
+        InvalidInputError
+            If no reference image is provided and none was set.
+        """
+        if t1w_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            t1w_img = self._reference_image
+
+        try:
+            mask_img = nib.load(str(t1w_img))
+            mask_data = mask_img.get_fdata()  # type: ignore[attr-defined]
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to load glass brain from {t1w_img}: {e}",
+            ) from e
+        else:
+            return actor.contour_from_roi(mask_data, color=[0, 0, 0], opacity=0.05)
+
+    def _set_anatomical_camera(
+        self,
+        scene: window.Scene,
+        centroid: np.ndarray,
+        view_name: str,
+        *,
+        camera_distance: float | None = None,
+        bbox_size: np.ndarray | None = None,
+    ) -> None:
+        """Set camera position for standard anatomical views.
+
+        Wrapper around utils.set_anatomical_camera for class method compatibility.
+
+        Parameters
+        ----------
+        scene : window.Scene
+            The FURY scene to set the camera on.
+        centroid : np.ndarray
+            The centroid of the streamlines (3D coordinates).
+        view_name : str
+            Name of the view: "coronal", "axial", or "sagittal".
+        camera_distance : float | None, optional
+            Distance of camera from centroid. If None, calculated from bbox_size.
+        bbox_size : np.ndarray | None, optional
+            Bounding box size of streamlines. Used to calculate camera_distance if not provided.
+
+        Raises
+        ------
+        InvalidInputError
+            If view_name is not one of the standard anatomical views.
+        """
+        try:
+            set_anatomical_camera(
+                scene,
+                centroid,
+                view_name,
+                camera_distance=camera_distance,
+                bbox_size=bbox_size,
+            )
+        except ValueError as e:
+            raise InvalidInputError(str(e)) from e
+
+    def _create_scene(
+        self,
+        *,
+        ref_img: str | Path | None = None,
+        show_glass_brain: bool = True,
+    ) -> tuple[window.Scene, actor.Actor | None]:
+        """Create a new scene with optional glass brain.
+
+        Parameters
+        ----------
+        show_glass_brain : bool, optional
+            Whether to add glass brain to the scene. Default is True.
+        ref_img : str | Path | None, optional
+            Reference image for glass brain. If None, uses default.
+
+        Returns
+        -------
+        tuple[window.Scene, actor.Actor | None]
+            The scene and brain actor (if added, otherwise None).
+        """
+        scene = window.Scene()
+        scene.SetBackground(1, 1, 1)
+
+        brain_actor = None
+        if show_glass_brain:
+            brain_actor = self.get_glass_brain(ref_img)
+            scene.add(brain_actor)
+
+        return scene, brain_actor
+
+    def _create_streamline_actor(
+        self,
+        streamlines: Streamlines,
+        colors: np.ndarray | None = None,
+    ) -> actor.Actor:
+        """Create a streamline actor with optional colors, handling length mismatches.
+
+        Parameters
+        ----------
+        streamlines : Streamlines
+            The streamlines to visualize.
+        colors : np.ndarray | None, optional
+            Colors array. If provided, must match streamlines length or will be adjusted.
+
+        Returns
+        -------
+        actor.Actor
+            The streamline actor.
+        """
+        if colors is not None:
+            if len(colors) == len(streamlines):
+                return actor.line(streamlines, colors=colors)
+            # Handle length mismatch
+            if len(colors) < len(streamlines):
+                repeat_factor = len(streamlines) // len(colors) + 1
+                extended_colors = np.tile(colors, (repeat_factor, 1))[: len(streamlines)]
+                return actor.line(streamlines, colors=extended_colors)
+            return actor.line(streamlines, colors=colors[: len(streamlines)])
+        return actor.line(streamlines)
+
+    def _extract_tract_name(self, tract_file: str | Path) -> str:
+        """Extract tract name from file path (without extension).
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to tractography file.
+
+        Returns
+        -------
+        str
+            Tract name without extension.
+        """
+        return Path(tract_file).stem
+
+    def load_tract(
+        self,
+        tract_file: str | Path,
+        ref_img: str | Path | None = None,
+    ) -> actor.Actor:
+        """Load the tractography file and create an actor.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the tractography file (.trk).
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization or via `set_reference_image()`.
+
+        Returns
+        -------
+        actor.Actor
+            The tractography actor.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the tract or reference image file is not found.
+        InvalidInputError
+            If no reference image is provided and none was set.
+        TractographyVisualizationError
+            If loading or transformation fails.
+        """
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+
+        try:
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+            ref_img_obj = nib.load(str(ref_img))
+            tract_to_ref = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+            )
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to load tract from {tract_file}: {e}",
+            ) from e
+        else:
+            return actor.line(tract_to_ref)
+
+    def weighted_afq(
+        self,
+        tract_file: str | Path,
+        atlas_file: str | Path,
+        metric_file: str | Path,
+    ) -> np.ndarray:
+        """Calculate weighted AFQ profile for tractography.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the tractography file.
+        atlas_file : str | Path
+            Path to the atlas tractography file.
+        metric_file : str | Path
+            Path to the metric image file.
+
+        Returns
+        -------
+        np.ndarray
+            The AFQ profile array.
+
+        Raises
+        ------
+        FileNotFoundError
+            If any required file is not found.
+        InvalidInputError
+            If clustering fails or no centroids are found.
+        TractographyVisualizationError
+            If processing fails.
+        """
+        try:
+            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            metric_img = nib.load(str(metric_file))
+            metric = metric_img.get_fdata()  # type: ignore[attr-defined]
+
+            feature = ResampleFeature(nb_points=self.afq_resample_points)
+            qb_metric = AveragePointwiseEuclideanMetric(feature)
+            qb = QuickBundles(threshold=np.inf, metric=qb_metric)
+            cluster_tract = qb.cluster(atlas_tract.streamlines)
+
+            if len(cluster_tract.centroids) == 0:
+                raise InvalidInputError(
+                    "No centroids found in atlas tractography clustering.",
+                )
+
+            standard_tract = cluster_tract.centroids[0]
+            oriented_tract = orient_by_streamline(tract.streamlines, standard_tract)
+            w_tract = gaussian_weights(oriented_tract)
+            profile = afq_profile(
+                metric,
+                oriented_tract,
+                affine=metric_img.affine,  # type: ignore[attr-defined]
+                weights=w_tract,
+            )
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError, IndexError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to calculate weighted AFQ profile: {e}",
+            ) from e
+        else:
+            return profile
+
+    def calc_cci(
+        self,
+        tract: StatefulTractogram,
+    ) -> tuple[np.ndarray, StatefulTractogram]:
+        """Calculate Cluster Confidence Index (CCI) for tractography.
+
+        Parameters
+        ----------
+        tract : StatefulTractogram
+            The tractography data.
+
+        Returns
+        -------
+        tuple[np.ndarray, StatefulTractogram]
+            A tuple containing:
+            - CCI values as a numpy array
+            - Filtered tractogram with streamlines above threshold
+
+        Raises
+        ------
+        InvalidInputError
+            If the tractogram is empty or processing fails.
+        TractographyVisualizationError
+            If calculation fails.
+        """
+        if not tract.streamlines or len(tract.streamlines) == 0:
+            raise InvalidInputError("Tractogram is empty.")
+
+        try:
+            lengths = list(length(tract.streamlines))
+            long_streamlines = Streamlines()
+            for i, sl in enumerate(tract.streamlines):
+                if lengths[i] > self.min_streamline_length:
+                    long_streamlines.append(sl)
+
+            if len(long_streamlines) == 0:
+                raise InvalidInputError(
+                    f"No streamlines longer than {self.min_streamline_length}mm found.",
+                )
+
+            cci = cluster_confidence(long_streamlines)
+
+            # Create boolean mask for streamlines above threshold
+            keep_mask = cci >= self.cci_threshold
+
+            # Filter streamlines and CCI values to match
+            keep_streamlines = Streamlines()
+            for i, sl in enumerate(long_streamlines):
+                if keep_mask[i]:
+                    keep_streamlines.append(sl)
+
+            # Filter CCI array to match kept streamlines
+            keep_cci = cci[keep_mask]
+            keep_tract = StatefulTractogram(keep_streamlines, nib.load(str(self._reference_image)), Space.RASMM)
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError, IndexError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to calculate CCI: {e}",
+            ) from e
+        else:
+            return keep_cci, keep_tract
+
+    def generate_anatomical_views(
+        self,
+        tract_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+    ) -> dict[str, Path]:
+        """Generate snapshots from standard anatomical views.
+
+        Creates static images from coronal, axial, and sagittal views of the tract.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the tractography file.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of the output images in pixels. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Keys: "coronal", "axial", "sagittal".
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available or invalid view name.
+        TractographyVisualizationError
+            If image generation fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz", output_directory="output/"
+        ... )
+        >>> # Generate all views
+        >>> views = visualizer.generate_anatomical_views("tract.trk")
+        >>> # Generate specific views
+        >>> views = visualizer.generate_anatomical_views(
+        ...     "tract.trk", views=["coronal", "axial"]
+        ... )
+        """
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            # Validate view names
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        tract_name = self._extract_tract_name(tract_file)
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Load tract once
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+            ref_img_obj = nib.load(str(ref_img))
+            tract_streamlines = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Calculate colors based on streamline directions using utility function
+            streamline_colors = calculate_direction_colors(tract_streamlines)
+
+            # Get centroid using utility function
+            centroid = calculate_centroid(tract_streamlines)
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"{tract_name}_{view_name}.png"
+
+                # Create scene using helper method
+                scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+                # Create actor with original streamlines using helper method
+                tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
+                scene.add(tract_actor)
+
+                # Set camera position for anatomical view (no streamline rotation needed)
+                # Calculate bbox for camera distance using utility function
+                bbox_size = calculate_bbox_size(tract_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                )
+
+                # Record the scene
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                scene.clear()
+
+                generated_views[view_name] = output_image
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to generate anatomical views: {e}",
+            ) from e
+        else:
+            return generated_views
+
+    def generate_atlas_views(
+        self,
+        atlas_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        atlas_ref_img: str | Path | None = None,
+        flip_lr: bool = False,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+        atlas_name: str | None = None,
+    ) -> dict[str, Path]:
+        """Generate anatomical views for an atlas tract.
+
+        Creates static images from coronal, axial, and sagittal views of the atlas
+        tract. This is useful for comparing subject tracts to atlas tracts using
+        the same viewing angles.
+
+        Parameters
+        ----------
+        atlas_file : str | Path
+            Path to the atlas tractography file.
+        ref_img : str | Path | None, optional
+            Path to the reference image for visualization (glass brain).
+            If None, uses the reference image set during initialization.
+        atlas_ref_img : str | Path | None, optional
+            Path to the reference image that matches the atlas coordinate space
+            (e.g., MNI template if atlas is in MNI space). If None, uses ref_img.
+            This is important if the atlas is in a different space (e.g., MNI)
+            than the subject reference image.
+        flip_lr: bool, optional
+            Whether to flip left-right (X-axis) when transforming atlas.
+            This may be needed for some coordinate conventions or file formats
+            where the left-right orientation differs. Try this if the atlas
+            appears on the wrong side compared to the subject. Default is False.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of the output images in pixels. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        atlas_name : str | None, optional
+            Name prefix for output files. If None, uses the stem of atlas_file.
+            Default is None.
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Keys: "coronal", "axial", "sagittal".
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available or invalid view name.
+        TractographyVisualizationError
+            If image generation fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz", output_directory="output/"
+        ... )
+        >>> # Generate all atlas views
+        >>> atlas_views = visualizer.generate_atlas_views("atlas_tract.trk")
+        >>> # Generate specific views
+        >>> atlas_views = visualizer.generate_atlas_views(
+        ...     "atlas_tract.trk", views=["coronal", "axial"]
+        ... )
+        """
+        # Determine reference image for atlas coordinate transformation
+        # If atlas is in different space (e.g., MNI), use atlas_ref_img
+        if atlas_ref_img is None:
+            atlas_ref_img = ref_img
+
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use provided atlas_name or derive from file
+        atlas_name = self._extract_tract_name(atlas_file) if atlas_name is None else str(atlas_name)
+
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Load atlas tract once
+            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+            atlas_tract.to_rasmm()
+
+            # Load reference image
+            ref_img_obj = nib.load(str(ref_img))
+
+            # Transform atlas streamlines to visualization reference space
+            # The atlas tract is already in RASMM after to_rasmm(), so we transform
+            # directly to the visualization reference space
+            atlas_streamlines = transform_streamlines(
+                atlas_tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Apply left-right flip if needed (common when atlas is in MNI space)
+            if flip_lr:
+                # Flip X-axis (left-right) by negating X coordinates
+                # This is needed when MNI and native space have different L/R conventions
+                atlas_streamlines = Streamlines(
+                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
+                )
+
+                # Also update centroid after flip
+                all_points = np.vstack([np.array(sl) for sl in atlas_streamlines])
+                centroid = np.mean(all_points, axis=0)
+
+            # Calculate colors based on streamline directions using utility function
+            streamline_colors = calculate_direction_colors(atlas_streamlines)
+
+            # Get centroid using utility function (recalculate after any transformations)
+            centroid = calculate_centroid(atlas_streamlines)
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
+
+                # Create scene using helper method
+                scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+                # Create actor with original streamlines using helper method
+                tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
+                scene.add(tract_actor)
+
+                # Set camera position for anatomical view using utility function
+                bbox_size = calculate_bbox_size(atlas_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                )
+
+                # Record the scene
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                scene.clear()
+
+                generated_views[view_name] = output_image
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to generate atlas views: {e}",
+            ) from e
+        else:
+            return generated_views
+
+    def plot_cci(
+        self,
+        cci: np.ndarray,
+        keep_tract: StatefulTractogram,
+        hist_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+        bins: int = 100,
+    ) -> dict[str, Path]:
+        """Plot CCI with anatomical views.
+
+        Generates anatomical views (coronal, axial, sagittal) with streamlines
+        colored by CCI values, along with a histogram plot.
+
+        Parameters
+        ----------
+        cci : np.ndarray
+            CCI values array (one per streamline in keep_tract).
+        keep_tract : StatefulTractogram
+            Filtered tractogram to visualize (should match CCI array length).
+        hist_file : str | Path
+            Path to save the histogram plot.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of the output images in pixels. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        bins : int, optional
+            Number of bins for histogram. Default is 100.
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Keys: "coronal", "axial", "sagittal", "histogram".
+
+        Raises
+        ------
+        InvalidInputError
+            If CCI array is empty or invalid, or length mismatch with tract.
+        TractographyVisualizationError
+            If plotting fails.
+        """
+        if len(cci) == 0:
+            raise InvalidInputError("CCI array is empty.")
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Create histogram
+            hist_path = Path(hist_file)
+            hist_path.parent.mkdir(parents=True, exist_ok=True)
+
+            fig, ax = plt.subplots(1, figsize=(8, 6))
+            ax.hist(cci, bins=bins, histtype="step")
+            ax.set_xlabel("CCI")
+            ax.set_ylabel("# streamlines")
+            ax.set_title("CCI Distribution")
+            ax.grid(visible=True, alpha=0.3)
+            fig.savefig(str(hist_path), dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            generated_views["histogram"] = hist_path
+
+            # Transform tract streamlines to reference space
+            ref_img_obj = nib.load(str(ref_img))
+            tract_streamlines = transform_streamlines(
+                keep_tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Validate CCI array matches tract (critical for memory safety)
+            if len(cci) != len(tract_streamlines):
+                raise InvalidInputError(
+                    f"CCI array length ({len(cci)}) does not match "
+                    f"tractogram streamlines ({len(tract_streamlines)}). "
+                    f"This can cause memory issues.",
+                )
+
+            # Calculate CCI colors for each streamline
+            # Use the same color scheme as the original CCI visualization
+            cci_min = float(cci.min())
+            cci_max = float(cci.max())
+
+            # Create lookup table with same parameters as original
+            hue = [0.5, 1]
+            saturation = [0.0, 1.0]
+            lut_cmap = actor.colormap_lookup_table(
+                scale_range=(cci_min, cci_max / 4),
+                hue_range=hue,
+                saturation_range=saturation,
+            )
+
+            bar = actor.scalar_bar(lookup_table=lut_cmap)
+
+            # Get centroid using utility function
+            centroid = calculate_centroid(tract_streamlines)
+            gc.collect()
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"cci_{view_name}.png"
+
+                # Create scene
+                scene = window.Scene()
+                scene.SetBackground(0.5, 0.5, 0.5)
+                scene.add(bar)
+
+                # Add glass brain if requested (no rotation needed - camera handles view)
+                brain_actor = None
+                if show_glass_brain:
+                    brain_actor = self.get_glass_brain(ref_img)
+                    scene.add(brain_actor)
+
+                # Use CCI array directly with original streamlines (no rotation - camera handles view)
+                tract_actor = actor.line(
+                    tract_streamlines,
+                    colors=cci,
+                    linewidth=0.1,
+                    lookup_colormap=lut_cmap,
+                )
+                scene.add(tract_actor)
+
+                # Set camera position for anatomical view using utility function
+                bbox_size = calculate_bbox_size(tract_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                )
+
+                # Record the scene
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+
+                # Explicitly clean up scene and actors to free memory
+                scene.clear()
+                del tract_actor
+                if brain_actor is not None:
+                    del brain_actor
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
+                gc.collect()
+
+                generated_views[view_name] = output_image
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(f"Failed to plot CCI: {e}") from e
+        else:
+            return generated_views
+
+    def plot_afq(
+        self,
+        metric_file: str | Path,
+        metric_str: str,
+        tract_file: str | Path,
+        atlas_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+        colormap: str = "Spectral",
+    ) -> dict[str, Path]:
+        """Plot AFQ profile with anatomical views.
+
+        Generates anatomical views (coronal, axial, sagittal) with streamlines
+        colored by AFQ profile values.
+
+        Parameters
+        ----------
+        metric_file : str | Path
+            Path to the metric image file.
+        metric_str : str
+            Name of the metric (e.g., "FA", "MD") for labeling.
+        tract_file : str | Path
+            Path to the tractography file.
+        atlas_file : str | Path
+            Path to the atlas tractography file.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of the output images in pixels. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        colormap : str, optional
+            Name of the colormap to use for AFQ profile values.
+            Default is "Spectral".
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Also includes "profile_plot" key for the profile line plot.
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available.
+        TractographyVisualizationError
+            If image generation fails.
+        """
+        # Calculate AFQ profile
+        profile = self.weighted_afq(tract_file, atlas_file, metric_file)
+
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        tract_name = self._extract_tract_name(tract_file)
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Load tract once
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+            ref_img_obj = nib.load(str(ref_img))
+            tract_streamlines = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Calculate AFQ profile colors for each streamline
+            # Store per-point colors for each streamline
+            streamline_point_colors = []
+            for sl in tract_streamlines:
+                sl_array = np.array(sl)
+                # Interpolate profile values to match streamline points
+                interpolated_values = np.interp(
+                    np.linspace(0, 1, len(sl_array)),
+                    np.linspace(0, 1, len(profile)),
+                    profile,
+                )
+                # Create colormap colors for each point
+                point_colors = create_colormap(interpolated_values, name=colormap)
+                streamline_point_colors.append(point_colors)
+
+            # Get centroid using utility function
+            centroid = calculate_centroid(tract_streamlines)
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
+
+                # Create scene using helper method
+                scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+                # Create actors with AFQ profile colors using original streamlines
+                # Colors are already calculated per point, so we can use them directly
+                for _i, (sl, point_colors) in enumerate(
+                    zip(tract_streamlines, streamline_point_colors),
+                ):
+                    line_actor = actor.line([sl], colors=point_colors)
+                    scene.add(line_actor)
+
+                # Set camera position for anatomical view using utility function
+                bbox_size = calculate_bbox_size(tract_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                )
+
+                # Record the scene
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                scene.clear()
+
+                generated_views[view_name] = output_image
+
+            # Also create the profile line plot
+            profile_plot_path = output_dir / f"{tract_name}_{metric_str}_profile.png"
+            fig, ax = plt.subplots(1, figsize=(8, 6))
+            ax.plot(profile)
+            ax.set_xlabel("Node along tract")
+            ax.set_ylabel(metric_str)
+            ax.set_title(f"AFQ Profile: {metric_str}")
+            ax.grid(visible=True, alpha=0.3)
+            fig.savefig(str(profile_plot_path), dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            generated_views["profile_plot"] = profile_plot_path
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to plot AFQ profile: {e}",
+            ) from e
+        else:
+            return generated_views
+
+    def calculate_shape_similarity(
+        self,
+        tract_file: str | Path,
+        atlas_file: str | Path,
+        *,
+        atlas_ref_img: str | Path | None = None,
+        flip_lr: bool = False,
+        clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+        threshold: float = 6,
+        rng: np.random.Generator | None = None,
+    ) -> float:
+        """Calculate shape similarity score between tract and atlas.
+
+        Uses DIPY's bundle_shape_similarity function with the Bundle Adjacency (BA) metric
+        to compute how closely the shapes of two bundles align.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the subject tractography file.
+        atlas_file : str | Path
+            Path to the atlas tractography file.
+        atlas_ref_img : str | Path | None, optional
+            Path to the reference image that matches the atlas coordinate space
+            (e.g., MNI template if atlas is in MNI space). If None, assumes atlas
+            is in the same space as the subject tract. This is important if the
+            atlas is in a different space (e.g., MNI) than the subject.
+        flip_lr : bool, optional
+            Whether to flip left-right (X-axis) when transforming atlas.
+            This may be needed for some coordinate conventions or file formats
+            where the left-right orientation differs. Default is False.
+        clust_thr : tuple[float, float, float], optional
+            Clustering thresholds for QuickBundlesX used internally.
+            Default is (5, 3, 1.5).
+        threshold : float, optional
+            Threshold controlling the strictness of the shape similarity assessment.
+            A smaller threshold requires the bundles to be more similar to achieve
+            a higher score. Default is 6.
+        rng : np.random.Generator | None, optional
+            Random number generator. If None, creates a new one. Default is None.
+
+        Returns
+        -------
+        float
+            Bundle similarity score (BA value). Higher values indicate greater
+            similarity between the bundles.
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If tracts are empty or invalid.
+        TractographyVisualizationError
+            If calculation fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer()
+        >>> score = visualizer.calculate_shape_similarity(
+        ...     "subject_tract.trk", "atlas_tract.trk"
+        ... )
+        >>> print(f"Shape similarity score: {score}")
+        """
+        try:
+            # Load both tracts
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+
+            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+            atlas_tract.to_rasmm()
+
+            # Check if tracts are empty
+            if not tract.streamlines or len(tract.streamlines) == 0:
+                raise InvalidInputError("Subject tract is empty.")
+            if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+                raise InvalidInputError("Atlas tract is empty.")
+
+            # Transform atlas to subject space if needed
+            if atlas_ref_img is not None:
+                atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+
+                # Transform atlas streamlines to subject reference space
+                atlas_streamlines = transform_streamlines(
+                    atlas_tract.streamlines,
+                    np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+                )
+
+                # Apply left-right flip if needed
+                if flip_lr:
+                    atlas_streamlines = Streamlines(
+                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
+                    )
+            else:
+                # No transformation needed, use streamlines directly
+                atlas_streamlines = atlas_tract.streamlines
+                if flip_lr:
+                    atlas_streamlines = Streamlines(
+                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
+                    )
+
+            # Use subject tract streamlines directly (already in RASMM)
+            subject_streamlines = tract.streamlines
+
+            # Create random number generator if not provided
+            if rng is None:
+                rng = np.random.default_rng()
+
+            # Calculate shape similarity using DIPY's function
+            similarity_score = bundle_shape_similarity(
+                subject_streamlines,
+                atlas_streamlines,
+                rng,
+                clust_thr=clust_thr,
+                threshold=threshold,
+            )
+
+            return float(similarity_score)
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError, IndexError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to calculate shape similarity: {e}",
+            ) from e
+
+    def visualize_shape_similarity(
+        self,
+        tract_file: str | Path,
+        atlas_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        atlas_ref_img: str | Path | None = None,
+        flip_lr: bool = False,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+        subject_color: tuple[float, float, float] = (1.0, 0.0, 0.0),  # Red
+        atlas_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
+    ) -> dict[str, Path]:
+        """Visualize shape similarity by overlaying subject and atlas tracts.
+
+        Generates anatomical views (coronal, axial, sagittal) showing both tracts
+        overlaid with different colors to visualize their shape similarity.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the subject tractography file.
+        atlas_file : str | Path
+            Path to the atlas tractography file.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        atlas_ref_img : str | Path | None, optional
+            Path to the reference image that matches the atlas coordinate space
+            (e.g., MNI template if atlas is in MNI space). If None, assumes atlas
+            is in the same space as the subject tract.
+        flip_lr : bool, optional
+            Whether to flip left-right (X-axis) when transforming atlas.
+            Default is False.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of the output images in pixels. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        subject_color : tuple[float, float, float], optional
+            RGB color for subject tract (0-1 range). Default is (1.0, 0.0, 0.0) (red).
+        atlas_color : tuple[float, float, float], optional
+            RGB color for atlas tract (0-1 range). Default is (0.0, 0.0, 1.0) (blue).
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Keys: "coronal", "axial", "sagittal".
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available or invalid view name.
+        TractographyVisualizationError
+            If visualization fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz", output_directory="output/"
+        ... )
+        >>> views = visualizer.visualize_shape_similarity(
+        ...     "subject_tract.trk", "atlas_tract.trk"
+        ... )
+        """
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        tract_name = self._extract_tract_name(tract_file)
+        atlas_name = self._extract_tract_name(atlas_file)
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Load both tracts
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+
+            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+            atlas_tract.to_rasmm()
+
+            # Check if tracts are empty
+            if not tract.streamlines or len(tract.streamlines) == 0:
+                raise InvalidInputError("Subject tract is empty.")
+            if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+                raise InvalidInputError("Atlas tract is empty.")
+
+            # Load reference images and transform tracts to same space
+            ref_img_obj = nib.load(str(ref_img))
+
+            # Transform subject tract to reference space
+            subject_streamlines = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Transform atlas to subject space if needed
+            if atlas_ref_img is not None:
+                atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+
+                # Transform atlas streamlines to subject reference space
+                atlas_streamlines = transform_streamlines(
+                    atlas_tract.streamlines,
+                    np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+                )
+
+                # Apply left-right flip if needed
+                if flip_lr:
+                    atlas_streamlines = Streamlines(
+                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
+                    )
+            else:
+                # No transformation needed, use streamlines directly
+                atlas_streamlines = transform_streamlines(
+                    atlas_tract.streamlines,
+                    np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+                )
+                if flip_lr:
+                    atlas_streamlines = Streamlines(
+                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
+                    )
+
+            # Calculate combined centroid for rotation (from both tracts)
+            # Calculate combined centroid using utility function
+            centroid = calculate_combined_centroid(subject_streamlines, atlas_streamlines)
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
+
+                # Create scene using helper method
+                scene, brain_actor = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+                # Add subject tract with subject color (single color for all streamlines)
+                # Use original streamlines - camera handles view
+                subject_colors = np.tile(subject_color, (len(subject_streamlines), 1))
+                subject_actor = actor.line(subject_streamlines, colors=subject_colors)
+                scene.add(subject_actor)
+
+                # Add atlas tract with atlas color (single color for all streamlines)
+                # Use original streamlines - camera handles view
+                atlas_colors = np.tile(atlas_color, (len(atlas_streamlines), 1))
+                atlas_actor = actor.line(atlas_streamlines, colors=atlas_colors)
+                scene.add(atlas_actor)
+
+                # Set camera position for anatomical view
+                # Use combined bbox of both tracts for camera distance
+                # Calculate combined bbox using utility function
+                bbox_size = calculate_combined_bbox_size(subject_streamlines, atlas_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                )
+
+                # Record the scene
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+
+                # Clean up
+                scene.clear()
+                del subject_actor, atlas_actor
+                if show_glass_brain:
+                    del brain_actor
+                gc.collect()
+
+                generated_views[view_name] = output_image
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to visualize shape similarity: {e}",
+            ) from e
+        else:
+            return generated_views
+
+    def compare_before_after_cci(
+        self,
+        tract_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+        before_color: tuple[float, float, float] = (0.7, 0.7, 0.7),  # Light gray
+        after_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
+    ) -> dict[str, Path]:
+        """Compare tract before and after CCI filtering.
+
+        Generates side-by-side anatomical views (coronal, axial, sagittal) showing
+        the tract before CCI filtering (left) and after CCI filtering (right).
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the tractography file.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of each side of the comparison image in pixels. The final image
+            will be twice as wide. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        before_color : tuple[float, float, float], optional
+            RGB color for before CCI filtering tract (0-1 range).
+            Default is (0.7, 0.7, 0.7) (light gray).
+        after_color : tuple[float, float, float], optional
+            RGB color for after CCI filtering tract (0-1 range).
+            Default is (0.0, 0.0, 1.0) (blue).
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Keys: "coronal", "axial", "sagittal".
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available or invalid view name.
+        TractographyVisualizationError
+            If comparison fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz", output_directory="output/"
+        ... )
+        >>> views = visualizer.compare_before_after_cci("tract.trk")
+        """
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        tract_name = self._extract_tract_name(tract_file)
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Load tract
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+
+            # Calculate CCI and get filtered tract
+            _, filtered_tract = self.calc_cci(tract)
+
+            # Transform both tracts to reference space
+            ref_img_obj = nib.load(str(ref_img))
+
+            # Before CCI filtering: use all streamlines (after length filtering)
+            # We need to get the streamlines that were used for CCI calculation
+            # (i.e., those longer than min_streamline_length)
+            lengths = list(length(tract.streamlines))
+            before_streamlines = Streamlines()
+            for i, sl in enumerate(tract.streamlines):
+                if lengths[i] > self.min_streamline_length:
+                    before_streamlines.append(sl)
+
+            before_streamlines = transform_streamlines(
+                before_streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # After CCI filtering: use filtered tract
+            after_streamlines = transform_streamlines(
+                filtered_tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Calculate combined centroid for rotation (from both tracts)
+            # Calculate combined centroid using utility function
+            centroid = calculate_combined_centroid(before_streamlines, after_streamlines)
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"cci_before_after_{tract_name}_{view_name}.png"
+
+                # Create side-by-side scenes using helper methods
+                # Left side: Before CCI filtering
+                scene_before, brain_actor_before = self._create_scene(
+                    ref_img=ref_img,
+                    show_glass_brain=show_glass_brain,
+                )
+
+                # Add before tract (use original streamlines - camera handles view)
+                before_colors = np.tile(before_color, (len(before_streamlines), 1))
+                before_actor = actor.line(before_streamlines, colors=before_colors)
+                scene_before.add(before_actor)
+
+                # Set camera for before scene using utility function
+                bbox_size_before = calculate_bbox_size(before_streamlines)
+                self._set_anatomical_camera(
+                    scene_before,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size_before,
+                )
+
+                # Right side: After CCI filtering
+                scene_after, brain_actor_after = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+                # Add after tract (use original streamlines - camera handles view)
+                after_colors = np.tile(after_color, (len(after_streamlines), 1))
+                after_actor = actor.line(after_streamlines, colors=after_colors)
+                scene_after.add(after_actor)
+
+                # Set camera for after scene using utility function
+                bbox_size_after = calculate_bbox_size(after_streamlines)
+                self._set_anatomical_camera(
+                    scene_after,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size_after,
+                )
+
+                # Record both scenes to temporary files
+
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_before:
+                    tmp_before_path = tmp_before.name
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_after:
+                    tmp_after_path = tmp_after.name
+
+                window.record(
+                    scene=scene_before,
+                    out_path=tmp_before_path,
+                    size=figure_size,
+                )
+                window.record(
+                    scene=scene_after,
+                    out_path=tmp_after_path,
+                    size=figure_size,
+                )
+
+                # Combine images side-by-side using PIL/Pillow or imageio
+                try:
+                    img_before = Image.open(tmp_before_path)
+                    img_after = Image.open(tmp_after_path)
+
+                    # Create combined image (twice as wide)
+                    combined_width = figure_size[0] * 2
+                    combined_height = figure_size[1]
+                    combined_img = Image.new("RGB", (combined_width, combined_height), (255, 255, 255))
+                    combined_img.paste(img_before, (0, 0))
+                    combined_img.paste(img_after, (figure_size[0], 0))
+                    combined_img.save(str(output_image))
+
+                    img_before.close()
+                    img_after.close()
+                except ImportError:
+                    # Fallback to imageio if PIL not available
+
+                    img_before = imageio.imread(tmp_before_path)
+                    img_after = imageio.imread(tmp_after_path)
+                    combined_img = np.concatenate([img_before, img_after], axis=1)
+                    imageio.imwrite(str(output_image), combined_img)
+
+                # Clean up temporary files
+                os.unlink(tmp_before_path)
+                os.unlink(tmp_after_path)
+
+                # Clean up scenes
+                scene_before.clear()
+                scene_after.clear()
+                del before_actor, after_actor
+                if show_glass_brain:
+                    del brain_actor_before, brain_actor_after
+                gc.collect()
+
+                generated_views[view_name] = output_image
+
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to compare before/after CCI: {e}",
+            ) from e
+        else:
+            return generated_views
+
+    def visualize_bundle_assignment(
+        self,
+        tract_file: str | Path,
+        atlas_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        n_segments: int = 100,
+        views: list[str] | None = None,
+        output_dir: str | Path | None = None,
+        figure_size: tuple[int, int] = (800, 800),
+        show_glass_brain: bool = True,
+        colormap: str = "random",
+    ) -> dict[str, Path]:
+        """Visualize bundle assignment map using DIPY's assignment_map.
+
+        Assigns each streamline in the target tract to a segment of the model
+        bundle using DIPY's assignment_map function. Color-codes streamlines
+        by their assigned segment. Generates anatomical views showing which
+        streamlines belong to which bundle segment.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the target tractography file (streamlines to assign).
+        atlas_file : str | Path
+            Path to the atlas tractography file (reference bundle for assignment).
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        n_segments : int, optional
+            Number of segments to divide the model bundle into. Each streamline
+            in the target tract will be assigned to the closest segment.
+            Default is 100.
+        views : list[str] | None, optional
+            List of views to generate. Options: "coronal", "axial", "sagittal".
+            If None, generates all three views. Default is None.
+        output_dir : str | Path | None, optional
+            Output directory for generated images. If None, uses the output
+            directory set during initialization.
+        figure_size : tuple[int, int], optional
+            Size of the output images in pixels. Default is (800, 800).
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        colormap : str, optional
+            Name of the colormap to use for segment colors. Should be a
+            discrete colormap (e.g., "tab20", "Set3", "Paired").
+            Default is "tab20".
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping view names to their output file paths.
+            Keys: "coronal", "axial", "sagittal".
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available or invalid view name.
+        TractographyVisualizationError
+            If visualization fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz", output_directory="output/"
+        ... )
+        >>> views = visualizer.visualize_bundle_assignment(
+        ...     "target_tract.trk", "model_tract.trk", n_segments=100
+        ... )
+        """
+        # Use standard anatomical view angles from utils
+        view_angles = ANATOMICAL_VIEW_ANGLES
+        rgb = (2, 3)
+
+        # Determine which views to generate
+        if views is None:
+            views_to_generate = list(view_angles.keys())
+        else:
+            views_to_generate = views
+            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            if invalid_views:
+                raise InvalidInputError(
+                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                )
+
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        tract_name = self._extract_tract_name(tract_file)
+        generated_views: dict[str, Path] = {}
+
+        try:
+            # Load both tracts
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+
+            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+            atlas_tract.to_rasmm()
+
+            if not tract.streamlines or len(tract.streamlines) == 0:
+                raise InvalidInputError("Target tractogram is empty.")
+            if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+                raise InvalidInputError("Atlas tractogram is empty.")
+
+            # Transform both tracts to reference space for assignment
+            # assignment_map requires both tracts to be in the same coordinate space
+            ref_img_obj = nib.load(str(ref_img))
+            tract_streamlines = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+            atlas_streamlines = transform_streamlines(
+                atlas_tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Calculate assignments on transformed streamlines (both in same space)
+            # This ensures consistent colors across all rotations
+            # Use assignment_map to assign target streamlines to model bundle segments
+            # assignment_map returns per-point assignments (one assignment per point)
+            # Assignments are in the order points appear when iterating through streamlines sequentially
+            assignment_indices = assignment_map(tract_streamlines, atlas_streamlines, n_segments)
+            assignment_indices = np.array(assignment_indices)
+
+            # Generate colors for each segment
+            # Use random colors like DIPY example (produces wide spectrum of distinct colors)
+            # or use a colormap if specified (e.g., "Spectral", "hsv", "rainbow" for wide spectrum)
+            if colormap == "random" or colormap is None:
+                # Match DIPY example: use random colors for maximum color differentiation
+                # This produces a wide spectrum of distinct colors like the example image
+                rng = np.random.default_rng()
+                segment_colors = [tuple(rng.random(3)) for si in range(n_segments)]
+            else:
+                # Use specified colormap
+                # For wide spectrum, consider: "Spectral", "hsv", "rainbow", "turbo"
+                segment_colors_array = create_colormap(
+                    np.linspace(0, 1, n_segments),
+                    name=colormap,
+                )
+                # Convert to RGB (0-1 range), remove alpha if present
+                segment_colors_array = (
+                    segment_colors_array[:, : rgb[1]]
+                    if segment_colors_array.shape[1] > rgb[1]
+                    else segment_colors_array
+                )
+                # Convert to list of tuples for compatibility
+                segment_colors = [tuple(segment_colors_array[i]) for i in range(n_segments)]
+
+            # Create per-point colors based on assignment (matching DIPY example pattern)
+            # Convert to list of tuples as in DIPY example to ensure proper color application
+            # This is calculated once and reused for all rotations
+            # Each point gets the color corresponding to its segment assignment
+            # This creates the banding effect as points along a streamline are assigned to different segments
+            # IMPORTANT: assignment_indices are in the order points appear when iterating through
+            # streamlines sequentially (streamline 0 all points, then streamline 1 all points, etc.)
+            point_colors = []
+            for i in range(len(assignment_indices)):
+                # Get the color for this point's assigned segment
+                seg_idx = assignment_indices[i]
+                # Ensure index is within bounds
+                if seg_idx < 0 or seg_idx >= len(segment_colors):
+                    # Fallback to first color if index is out of bounds
+                    point_colors.append(segment_colors[0])
+                else:
+                    point_colors.append(tuple(segment_colors[seg_idx]))
+
+            # Debug: Show sample of assignments and colors for first streamline (after point_colors is created)
+            point_idx = 0
+            first_sl = tract_streamlines[0]
+            first_sl_assignments = assignment_indices[point_idx : point_idx + len(first_sl)]
+            first_sl_colors = point_colors[point_idx : point_idx + len(first_sl)]
+            logger.debug(
+                "First streamline: %d points, %d unique segments",
+                len(first_sl),
+                len(np.unique(first_sl_assignments)),
+            )
+            logger.debug("Sample assignments (first 10): %s", first_sl_assignments[:10])
+            logger.debug("Sample colors (first 3): %s", first_sl_colors[:3])
+
+            # Get centroid using utility function
+            centroid = calculate_centroid(tract_streamlines)
+            gc.collect()
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
+
+                # Create scene using helper method
+                scene, brain_actor = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+                # Convert colors to numpy array format (N x 3) for actor.line
+                point_colors_array = np.array(point_colors, dtype=np.float32)
+
+                # Ensure the array has the correct shape (N points x 3 RGB values)
+                if point_colors_array.ndim != rgb[0] or point_colors_array.shape[1] != rgb[1]:
+
+                    def _create_shape_error(error_msg: str) -> ValueError:
+                        return ValueError(error_msg)
+
+                    msg = (
+                        f"point_colors_array has incorrect shape: {point_colors_array.shape}. "
+                        f"Expected (N, 3) where N is the number of points."
+                    )
+                    raise _create_shape_error(msg)
+
+                # Use original streamlines with original colors - no rotation needed
+                tract_actor = actor.line(tract_streamlines, colors=point_colors_array, fake_tube=True, linewidth=6)
+                scene.add(tract_actor)
+
+                # Set camera position for anatomical view (no streamline rotation needed)
+                # Calculate bbox for camera distance using utility function
+                bbox_size = calculate_bbox_size(tract_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                )
+
+                # Record the scene
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+
+                # Clean up
+                scene.clear()
+                del tract_actor
+                if show_glass_brain:
+                    del brain_actor
+                gc.collect()
+
+                generated_views[view_name] = output_image
+
+        except (OSError, ValueError, RuntimeError, IndexError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to visualize bundle assignment: {e}",
+            ) from e
+        else:
+            return generated_views
+
+    def generate_gif(
+        self,
+        name: str,
+        tract_file: str | Path,
+        ref_file: str | Path | None = None,
+        *,
+        output_dir: str | Path | None = None,
+    ) -> Path:
+        """Generate a GIF animation of rotating tractography.
+
+        Parameters
+        ----------
+        name : str
+            Base name for the output GIF file (without extension).
+        tract_file : str | Path
+            Path to the tractography file.
+        ref_file : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        output_dir : str | Path | None, optional
+            Output directory. If None, uses the output directory set during
+            initialization or creates a default directory.
+
+        Returns
+        -------
+        Path
+            Path to the generated GIF file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no output directory is available.
+        TractographyVisualizationError
+            If GIF generation fails.
+        """
+        if ref_file is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_file = self._reference_image
+
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        gif_filename = output_dir / f"{name}.gif"
+
+        try:
+            # Load tract and get streamlines for rotation
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+            ref_img_obj = nib.load(str(ref_file))
+            tract_streamlines = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Create initial actors
+            tract_actor = actor.line(tract_streamlines)
+            brain_actor = self.get_glass_brain(ref_file)
+            scene = window.Scene()
+            scene.add(brain_actor)
+            scene.add(tract_actor)
+            scene.setBackground(color=(1, 1, 1))
+
+            angles = np.linspace(0, 360, self.gif_frames, endpoint=False)
+            rotation_axis = np.array([0, 0, 1])  # Rotate around Z-axis
+            rotation_center = np.array([0, 0, 0])
+            gif_frames = []
+
+            for angle in angles:
+                rot_matrix = Rotation.from_rotvec(
+                    angle * np.pi / 180 * rotation_axis,
+                ).as_matrix()
+
+                # Rotate streamlines around the origin
+                rotated_streamlines = [
+                    np.dot(s - rotation_center, rot_matrix.T) + rotation_center for s in tract_streamlines
+                ]
+                stream_actor = actor.line(rotated_streamlines)
+
+                # Convert to 4x4 transformation matrix
+                transform_matrix = np.eye(4)
+                transform_matrix[:3, :3] = rot_matrix
+                transform_matrix[:3, 3] = rotation_center - np.dot(
+                    rot_matrix,
+                    rotation_center,
+                )
+
+                # Rotate glass brain using VTK transform
+                transform = vtk.vtkTransform()
+                transform.Concatenate(transform_matrix.flatten())
+
+                brain_actor.SetUserTransform(transform)
+
+                # Clear scene and re-add actors
+                scene.clear()
+                scene.add(stream_actor)
+                scene.add(brain_actor)
+
+                frame = window.snapshot(scene, size=self.gif_size)
+                gif_frames.append(frame)
+
+                # Force memory cleanup
+                del stream_actor
+                gc.collect()
+
+            # Save as optimized GIF
+            imageio.mimsave(
+                str(gif_filename),
+                gif_frames,
+                duration=self.gif_duration,
+                palettesize=self.gif_palette_size,
+            )
+        except TractographyVisualizationError:
+            raise
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to generate GIF: {e}",
+            ) from e
+        else:
+            return gif_filename
+
+    def convert_gif_to_mp4(
+        self,
+        gif_path: str | Path,
+        mp4_path: str | Path | None = None,
+        *,
+        fps: int = 10,
+    ) -> Path:
+        """Convert a GIF file to MP4 format.
+
+        Parameters
+        ----------
+        gif_path : str | Path
+            Path to the input GIF file.
+        mp4_path : str | Path | None, optional
+            Path to the output MP4 file. If None, uses the same name as GIF
+            with .mp4 extension.
+        fps : int, optional
+            Frames per second for the video. Default is 10.
+
+        Returns
+        -------
+        Path
+            Path to the generated MP4 file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the GIF file is not found.
+        TractographyVisualizationError
+            If conversion fails.
+        """
+        gif_path_obj = Path(gif_path)
+        if mp4_path is None:
+            mp4_path = gif_path_obj.with_suffix(".mp4")
+        else:
+            mp4_path = Path(mp4_path)
+            mp4_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            reader = imageio.get_reader(str(gif_path_obj))
+            writer = imageio.get_writer(
+                str(mp4_path),
+                format="FFMPEG",  # type: ignore[arg-type]
+                fps=fps,
+                codec="libx264",
+            )
+
+            for frame in reader:  # type: ignore[attr-defined]
+                writer.append_data(frame)
+
+            writer.close()
+            reader.close()
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to convert GIF to MP4: {e}",
+            ) from e
+        else:
+            return mp4_path
+
+    def generate_videos(
+        self,
+        tract_files: list[str | Path],
+        ref_file: str | Path | None = None,
+        *,
+        output_dir: str | Path | None = None,
+        remove_gifs: bool = True,
+    ) -> dict[str, Path]:
+        """Generate MP4 videos from multiple tractography files.
+
+        Parameters
+        ----------
+        tract_files : list[str | Path]
+            List of paths to tractography files.
+        ref_file : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization.
+        output_dir : str | Path | None, optional
+            Output directory. If None, uses the output directory set during
+            initialization.
+        remove_gifs : bool, optional
+            Whether to remove intermediate GIF files. Default is True.
+
+        Returns
+        -------
+        dict[str, Path]
+            Dictionary mapping tract names to their MP4 file paths.
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If the tract_files list is empty.
+        TractographyVisualizationError
+            If video generation fails.
+        """
+        if not tract_files:
+            raise InvalidInputError("No tract files provided.")
+
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        tract_videos: dict[str, Path] = {}
+
+        for tract_file in tract_files:
+            try:
+                tract_path = Path(tract_file)
+                tract_name = tract_path.stem
+
+                tract_gif = self.generate_gif(
+                    name=tract_name,
+                    tract_file=tract_path,
+                    ref_file=ref_file,
+                    output_dir=output_dir,
+                )
+                tract_mp4 = output_dir / f"{tract_name}.mp4"
+                self.convert_gif_to_mp4(tract_gif, tract_mp4)
+
+                if remove_gifs:
+                    tract_gif.unlink()
+
+                tract_videos[tract_name] = tract_mp4
+            except (OSError, ValueError, RuntimeError) as e:
+                raise TractographyVisualizationError(
+                    f"Failed to generate video for {tract_file}: {e}",
+                ) from e
+
+        return tract_videos
+
+    def run_quality_check_workflow(
+        self,
+        subjects_original_space: dict[str, dict[str, str | Path]],
+        *,
+        subjects_mni_space: dict[str, dict[str, str | Path]] | None = None,
+        atlas_files: dict[str, str | Path] | None = None,
+        metric_files: dict[str, dict[str, str | Path]] | None = None,
+        atlas_ref_img: str | Path | None = None,
+        flip_lr: bool = False,
+        output_dir: str | Path | None = None,
+        html_output: str | Path | None = None,
+        skip_checks: list[str] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, dict[str, dict[str, str | Path]]]:
+        """Run comprehensive quality checks for multiple subjects and tracts.
+
+        This workflow function orchestrates all available quality check methods
+        for each subject/tract combination and generates an HTML report.
+
+        Different quality checks require tracts in different coordinate spaces:
+        - **Original space** (subjects_original_space): Used for anatomical views,
+          CCI calculations, before/after CCI comparison, and AFQ profiles
+          (which need to align with subject-specific metric files).
+        - **MNI/Atlas space** (subjects_mni_space): Used for shape similarity
+          calculations and bundle assignment (which compare with atlas files).
+
+        Parameters
+        ----------
+        subjects_original_space : dict[str, dict[str, str | Path]]
+            Dictionary mapping subject IDs to their tract files in original/native space.
+            Format: {subject_id: {tract_name: tract_file_path}}
+            Example:
+            {
+                "sub-001": {
+                    "AF_L": "path/to/sub-001_AF_L_original.trk",
+                    "AF_R": "path/to/sub-001_AF_R_original.trk"
+                },
+                "sub-002": {
+                    "AF_L": "path/to/sub-002_AF_L_original.trk"
+                }
+            }
+            Used for: anatomical views, CCI, before/after CCI, AFQ profiles.
+        subjects_mni_space : dict[str, dict[str, str | Path]] | None, optional
+            Dictionary mapping subject IDs to their tract files in MNI/atlas space.
+            Format: {subject_id: {tract_name: tract_file_path}}
+            Example:
+            {
+                "sub-001": {
+                    "AF_L": "path/to/sub-001_AF_L_mni.trk",
+                    "AF_R": "path/to/sub-001_AF_R_mni.trk"
+                },
+                "sub-002": {
+                    "AF_L": "path/to/sub-002_AF_L_mni.trk"
+                }
+            }
+            Used for: shape similarity, bundle assignment.
+            If None, these checks will be skipped.
+        atlas_files : dict[str, str | Path] | None, optional
+            Dictionary mapping tract names to their corresponding atlas/model files.
+            These files are shared across all subjects and used for:
+            - Atlas comparison visualizations
+            - Shape similarity calculations
+            - AFQ profile calculations (as model files)
+            - Bundle assignment visualizations (as model files)
+            Format: {tract_name: atlas_file_path}
+            Example: {"AF_L": "path/to/atlas_AF_L.trk", "AF_R": "path/to/atlas_AF_R.trk"}
+        metric_files : dict[str, dict[str, str | Path]] | None, optional
+            Dictionary mapping subject IDs to their metric files.
+            All tracts within a subject will use the same metric files.
+            Format: {subject_id: {metric_name: metric_file_path}}
+            Example:
+            {
+                "sub-001": {"FA": "path/to/sub-001_FA.nii.gz", "MD": "path/to/sub-001_MD.nii.gz"},
+                "sub-002": {"FA": "path/to/sub-002_FA.nii.gz"}
+            }
+            If provided, AFQ profile calculations will be run for all tracts in each subject.
+        atlas_ref_img : str | Path | None, optional
+            Path to the reference image matching the atlas coordinate space
+            (e.g., MNI template). Required if atlas files are in a different
+            coordinate space than subject tracts.
+        flip_lr : bool, optional
+            Whether to flip left-right (X-axis) when transforming atlas.
+            Default is False.
+        output_dir : str | Path | None, optional
+            Output directory for generated files. If None, uses the output
+            directory set during initialization.
+        html_output : str | Path | None, optional
+            Path for the HTML report file. If None, creates "quality_check_report.html"
+            in the output directory.
+        skip_checks : list[str] | None, optional
+            List of quality checks to skip. Valid options:
+            - "anatomical_views": Skip standard anatomical views
+            - "atlas_comparison": Skip atlas comparison views
+            - "cci": Skip CCI calculation and visualization
+            - "before_after_cci": Skip before/after CCI comparison
+            - "afq_profile": Skip AFQ profile visualization
+            - "bundle_assignment": Skip bundle assignment visualization
+            - "shape_similarity": Skip shape similarity calculation and visualization
+        **kwargs
+            Additional keyword arguments passed to individual quality check methods.
+
+        Returns
+        -------
+        dict[str, dict[str, dict[str, str | Path]]]
+            Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+            This structure is compatible with `create_quality_check_html()`.
+
+        Raises
+        ------
+        InvalidInputError
+            If required files are missing or invalid.
+        TractographyVisualizationError
+            If quality check workflow fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz", output_directory="output/"
+        ... )
+        >>> # Tracts in original space (for most checks)
+        >>> subjects_original = {
+        ...     "sub-001": {
+        ...         "AF_L": "sub-001_AF_L_original.trk",
+        ...         "AF_R": "sub-001_AF_R_original.trk",
+        ...     }
+        ... }
+        >>> # Tracts in MNI space (for shape similarity and bundle assignment)
+        >>> subjects_mni = {
+        ...     "sub-001": {"AF_L": "sub-001_AF_L_mni.trk", "AF_R": "sub-001_AF_R_mni.trk"}
+        ... }
+        >>> # Atlas files are shared across all subjects
+        >>> atlas_files = {"AF_L": "atlas_AF_L.trk", "AF_R": "atlas_AF_R.trk"}
+        >>> # Metric files are per-subject (all tracts in a subject use the same metrics)
+        >>> metric_files = {
+        ...     "sub-001": {"FA": "sub-001_FA.nii.gz", "MD": "sub-001_MD.nii.gz"}
+        ... }
+        >>> results = visualizer.run_quality_check_workflow(
+        ...     subjects_original_space=subjects_original,
+        ...     subjects_mni_space=subjects_mni,
+        ...     atlas_files=atlas_files,
+        ...     metric_files=metric_files,
+        ...     html_output="quality_report.html",
+        ... )
+        """
+        # Get output directory
+        if output_dir is None:
+            if self._output_directory is None:
+                raise InvalidInputError(
+                    "No output directory provided. Set it via constructor or "
+                    "set_output_directory() method, or pass it as an argument.",
+                )
+            output_dir = self._output_directory
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set default skip_checks
+        if skip_checks is None:
+            skip_checks = []
+
+        # Initialize results dictionary
+        results: dict[str, dict[str, dict[str, str | Path]]] = {}
+
+        # Process each subject
+        for subject_id, tracts in subjects_original_space.items():
+            results[subject_id] = {}
+
+            # Create subject-specific output directory
+            subject_output_dir = output_dir / subject_id
+            subject_output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Process each tract for this subject
+            for tract_name, tract_file in tracts.items():
+                tract_path = Path(tract_file)
+                if not tract_path.exists():
+                    raise FileNotFoundError(f"Tract file not found: {tract_file}")
+
+                # Create tract-specific output directory
+                tract_output_dir = subject_output_dir / tract_name
+                tract_output_dir.mkdir(parents=True, exist_ok=True)
+
+                # Initialize results for this tract
+                results[subject_id][tract_name] = {}
+
+                try:
+                    # 1. Standard anatomical views
+                    if "anatomical_views" not in skip_checks:
+                        try:
+                            anatomical_views = self.generate_anatomical_views(
+                                tract_file,
+                                output_dir=tract_output_dir,
+                                **kwargs,
+                            )
+                            # Add anatomical views to results
+                            for view_name, view_path in anatomical_views.items():
+                                results[subject_id][tract_name][f"anatomical_{view_name}"] = view_path
+                        except (OSError, ValueError, RuntimeError) as e:
+                            logger.warning(
+                                "Failed to generate anatomical views for %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                e,
+                            )
+
+                    # 2. CCI calculation and visualization
+                    if "cci" not in skip_checks:
+                        try:
+                            # Plot CCI
+                            # TODO: Fix this - plot_cci expects (cci, keep_tract, hist_file), not tract_file
+                            cci_plots = self.plot_cci(
+                                tract_file,  # type: ignore[arg-type]
+                                output_dir=tract_output_dir,
+                                **kwargs,
+                            )
+                            # Add CCI plots to results
+                            for plot_type, plot_path in cci_plots.items():
+                                results[subject_id][tract_name][f"cci_{plot_type}"] = plot_path
+                        except (OSError, ValueError, RuntimeError) as e:
+                            logger.warning(
+                                "Failed to generate CCI plots for %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                e,
+                            )
+
+                    # 3. Before/after CCI comparison
+                    if "before_after_cci" not in skip_checks:
+                        try:
+                            before_after_views = self.compare_before_after_cci(
+                                tract_file,
+                                output_dir=tract_output_dir,
+                                **kwargs,
+                            )
+                            # Add before/after views to results
+                            for view_name, view_path in before_after_views.items():
+                                results[subject_id][tract_name][f"before_after_cci_{view_name}"] = view_path
+                        except (OSError, ValueError, RuntimeError) as e:
+                            logger.warning(
+                                "Failed to generate before/after CCI comparison for %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                e,
+                            )
+
+                    # 4. Atlas comparison (uses MNI space tracts for subject views)
+                    if "atlas_comparison" not in skip_checks and atlas_files is not None and tract_name in atlas_files:
+                        try:
+                            atlas_file = atlas_files[tract_name]
+                            # Generate subject views in MNI space if available, otherwise skip
+                            if (
+                                subjects_mni_space is not None
+                                and subject_id in subjects_mni_space
+                                and tract_name in subjects_mni_space[subject_id]
+                            ):
+                                tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                                # Generate subject views in MNI space
+                                subject_mni_views = self.generate_anatomical_views(
+                                    tract_file_mni,
+                                    ref_img=atlas_ref_img,  # Use atlas ref image for MNI space
+                                    output_dir=tract_output_dir,
+                                    **kwargs,
+                                )
+                                # Add subject MNI views to results
+                                for view_name, view_path in subject_mni_views.items():
+                                    results[subject_id][tract_name][f"subject_mni_{view_name}"] = view_path
+
+                            # Generate atlas views
+                            atlas_views = self.generate_atlas_views(
+                                atlas_file,
+                                atlas_ref_img=atlas_ref_img,
+                                flip_lr=flip_lr,
+                                output_dir=tract_output_dir,
+                                **kwargs,
+                            )
+                            # Add atlas views to results
+                            for view_name, view_path in atlas_views.items():
+                                results[subject_id][tract_name][f"atlas_{view_name}"] = view_path
+                        except (OSError, ValueError, RuntimeError) as e:
+                            logger.warning(
+                                "Failed to generate atlas comparison views for %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                e,
+                            )
+
+                    # 5. Shape similarity (uses MNI space tracts)
+                    if (
+                        "shape_similarity" not in skip_checks
+                        and atlas_files is not None
+                        and subjects_mni_space is not None
+                    ) and (
+                        subject_id in subjects_mni_space
+                        and tract_name in subjects_mni_space[subject_id]
+                        and tract_name in atlas_files
+                    ):
+                        try:
+                            # Use MNI space tract for shape similarity
+                            tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                            atlas_file = atlas_files[tract_name]
+                            # Calculate shape similarity score
+                            similarity_score = self.calculate_shape_similarity(
+                                tract_file_mni,
+                                atlas_file,
+                                atlas_ref_img=atlas_ref_img,
+                                flip_lr=flip_lr,
+                                **kwargs,
+                            )
+                            results[subject_id][tract_name]["shape_similarity_score"] = str(similarity_score)
+
+                            # Visualize shape similarity
+                            similarity_views = self.visualize_shape_similarity(
+                                tract_file_mni,
+                                atlas_file,
+                                atlas_ref_img=atlas_ref_img,
+                                flip_lr=flip_lr,
+                                output_dir=tract_output_dir,
+                                **kwargs,
+                            )
+                            # Add similarity views to results
+                            for view_name, view_path in similarity_views.items():
+                                results[subject_id][tract_name][f"similarity_{view_name}"] = view_path
+                        except (OSError, ValueError, RuntimeError, IndexError) as e:
+                            logger.warning(
+                                "Failed to calculate/visualize shape similarity for %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                e,
+                            )
+
+                    # 6. AFQ profile (requires metric files per subject and atlas files as model files)
+                    if ("afq_profile" not in skip_checks and metric_files is not None and atlas_files is not None) and (
+                        subject_id in metric_files and tract_name in atlas_files
+                    ):
+                        model_file = atlas_files[tract_name]  # Use atlas file as model file
+                        for metric_name, metric_file in metric_files[subject_id].items():
+                            try:
+                                afq_plots = self.plot_afq(
+                                    metric_file,
+                                    metric_name,
+                                    tract_file,
+                                    model_file,
+                                    output_dir=tract_output_dir,
+                                    **kwargs,
+                                )
+                                # Add AFQ plots to results
+                                for plot_type, plot_path in afq_plots.items():
+                                    results[subject_id][tract_name][f"afq_{metric_name}_{plot_type}"] = plot_path
+                            except (OSError, ValueError, RuntimeError, IndexError) as e:
+                                logger.warning(
+                                    "Failed to generate AFQ profile for %s/%s/%s: %s",
+                                    subject_id,
+                                    tract_name,
+                                    metric_name,
+                                    e,
+                                )
+
+                    # 7. Bundle assignment (uses MNI space tracts and atlas files as model files)
+                    if (
+                        "bundle_assignment" not in skip_checks
+                        and atlas_files is not None
+                        and subjects_mni_space is not None
+                    ) and (
+                        subject_id in subjects_mni_space
+                        and tract_name in subjects_mni_space[subject_id]
+                        and tract_name in atlas_files
+                    ):
+                        try:
+                            # Use MNI space tract for bundle assignment
+                            tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                            model_file = atlas_files[tract_name]  # Use atlas file as model file
+                            assignment_views = self.visualize_bundle_assignment(
+                                tract_file_mni,
+                                model_file,
+                                output_dir=tract_output_dir,
+                                **kwargs,
+                            )
+                            # Add assignment views to results
+                            for view_name, view_path in assignment_views.items():
+                                results[subject_id][tract_name][f"assignment_{view_name}"] = view_path
+                        except (OSError, ValueError, RuntimeError, IndexError) as e:
+                            logger.warning(
+                                "Failed to generate bundle assignment for %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                e,
+                            )
+
+                except (OSError, ValueError, RuntimeError):
+                    logger.exception("Error processing %s/%s", subject_id, tract_name)
+                    continue
+
+            # Generate HTML report
+            html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
+
+        # Convert Path objects to strings for HTML function
+        results_for_html: dict[str, dict[str, dict[str, str]]] = {}
+        for subject_id, subject_tracts in results.items():
+            results_for_html[subject_id] = {}
+            if isinstance(subject_tracts, dict):
+                for tract_name, media_dict in subject_tracts.items():
+                    results_for_html[subject_id][tract_name] = {}
+                    if isinstance(media_dict, dict):
+                        for media_type, file_path in media_dict.items():
+                            # Convert Path to string, or keep as string/number
+                            if isinstance(file_path, Path):
+                                results_for_html[subject_id][tract_name][media_type] = str(file_path)
+                            else:
+                                results_for_html[subject_id][tract_name][media_type] = str(file_path)
+
+        try:
+            create_quality_check_html(
+                results_for_html,
+                str(html_output),
+                title="Tractography Quality Check Report",
+            )
+            logger.info("Quality check report generated: %s", html_output)
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.warning("Failed to generate HTML report: %s", e)
+
+        return results
