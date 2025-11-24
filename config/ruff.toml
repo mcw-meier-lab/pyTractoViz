@@ -65,10 +65,13 @@ ignore = [
     "T201",  # Print statement
 ]
 "tests/**.py" = [
+    "ARG002",  # Unused method argument (mocks that are patched but not used)
     "ARG005",  # Unused lambda argument
     "FBT001",  # Boolean positional arg in function definition
     "PLR2004",  # Magic value used in comparison
+    "PT019",  # Fixture without value (parameters prefixed with _ are intentionally unused, not fixtures)
     "S101",  # Use of assert detected
+    "TC003",  # Move standard library import into type-checking block (Path used in annotations)
 ]
 
 [lint.flake8-quotes]
@@ -81,7 +84,7 @@ ban-relative-imports = "all"
 known-first-party = ["pytractoviz"]
 
 [lint.pydocstyle]
-convention = "google"
+convention = "numpy"
 
 [format]
 exclude = [

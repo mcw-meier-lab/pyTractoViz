@@ -21,14 +21,16 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Topic :: Documentation",
     "Topic :: Software Development",
     "Topic :: Utilities",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "dipy>=1.11.0",
+    "fury>=0.12.0",
+    "imageio>=2.37.2",
+]
 
 [project.urls]
 Homepage = "https://mcw-meier-lab.github.io/pytractoviz"

@@ -58,7 +58,8 @@ def _get_changelog_version() -> str:
 def changelog(ctx: Context, bump: str = "") -> None:
     """Update the changelog in-place with latest commits.
 
-    Parameters:
+    Parameters
+    ----------
         bump: Bump option passed to git-changelog.
     """
     ctx.run(tools.git_changelog(bump=bump or None), title="Updating changelog")
@@ -67,7 +68,7 @@ def changelog(ctx: Context, bump: str = "") -> None:
 
 @duty(pre=["check-quality", "check-types", "check-docs", "check-api"])
 def check(ctx: Context) -> None:
-    """Check it all!"""
+    """Check it all."""
 
 
 @duty(nofail=PY_VERSION == PY_DEV)
@@ -115,7 +116,8 @@ def check_api(ctx: Context, *cli_args: str) -> None:
 def docs(ctx: Context, *cli_args: str, host: str = "127.0.0.1", port: int = 8000) -> None:
     """Serve the documentation (localhost:8000).
 
-    Parameters:
+    Parameters
+    ----------
         host: The host to serve the docs from.
         port: The port to serve the docs on.
     """
@@ -174,7 +176,8 @@ def publish(ctx: Context) -> None:
 def release(ctx: Context, version: str = "") -> None:
     """Release a new Python package.
 
-    Parameters:
+    Parameters
+    ----------
         version: The new version number to use.
     """
     if not (version := (version or input("> Version to release: ")).strip()):

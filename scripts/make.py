@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-PYTHON_VERSIONS = os.getenv("PYTHON_VERSIONS", "3.10 3.11 3.12 3.13 3.14").split()
-PYTHON_DEV = "3.14"
+PYTHON_VERSIONS = os.getenv("PYTHON_VERSIONS", "3.10 3.11 3.12").split()
+PYTHON_DEV = "3.12"
 
 
 def shell(cmd: str, *, capture_output: bool = False, **kwargs: Any) -> str | None:
@@ -48,7 +48,7 @@ def uv_install(venv: Path) -> None:
 
 
 def setup() -> None:
-    """Setup the project."""
+    """Set up the project."""
     if not shutil.which("uv"):
         raise ValueError("make: setup: uv must be installed, see https://github.com/astral-sh/uv")
 
@@ -129,7 +129,7 @@ def vscode() -> None:
 
 
 def main() -> int:
-    """Main entry point."""
+    """Execute the main entry point."""
     args = list(sys.argv[1:])
     if not args or args[0] == "help":
         if len(args) > 1:

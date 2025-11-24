@@ -147,8 +147,6 @@ extra:
   social:
   - icon: fontawesome/brands/github
     link: https://github.com/l-espana
-  - icon: fontawesome/brands/gitter
-    link: https://gitter.im/pytractoviz/community
   - icon: fontawesome/brands/python
     link: https://pypi.org/project/pytractoviz/
   analytics:
