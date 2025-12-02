@@ -1605,7 +1605,7 @@ class TestVisualizeShapeSimilarity:
         result = visualizer.visualize_shape_similarity(
             mock_tract_file,
             mock_tract_file,
-            ref_img=mock_t1w_file,
+            atlas_ref_img=mock_t1w_file,
             output_dir=tmp_dir,
         )
         assert isinstance(result, dict)
@@ -1623,7 +1623,7 @@ class TestVisualizeShapeSimilarity:
             visualizer.visualize_shape_similarity(
                 mock_tract_file,
                 mock_tract_file,
-                ref_img=mock_t1w_file,
+                atlas_ref_img=mock_t1w_file,
             )
 
     def test_visualize_shape_similarity_invalid_view(
@@ -1638,7 +1638,7 @@ class TestVisualizeShapeSimilarity:
             visualizer.visualize_shape_similarity(
                 mock_tract_file,
                 mock_tract_file,
-                ref_img=mock_t1w_file,
+                atlas_ref_img=mock_t1w_file,
                 output_dir=tmp_dir,
                 views=["invalid_view"],
             )

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import gc
 import logging
+import multiprocessing
 import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,7 @@ def _process_tract_worker(
     atlas_files: dict[str, str | Path] | None,
     metric_files: dict[str, dict[str, str | Path]] | None,
     atlas_ref_img: str | Path | None,
+    *,
     flip_lr: bool,
     skip_checks: list[str],
     visualizer_params: dict[str, Any],
@@ -71,7 +72,7 @@ def _process_tract_worker(
     """
     # Create a new visualizer instance in this worker process
     visualizer = TractographyVisualizer(**visualizer_params)
-    
+
     # Process the tract
     try:
         results = visualizer._process_single_tract(
@@ -92,7 +93,7 @@ def _process_tract_worker(
         # Clean up the visualizer instance and force garbage collection
         del visualizer
         gc.collect()
-    
+
     return (subject_id, tract_name, results)
 
 
@@ -192,7 +193,6 @@ class TractographyVisualizer:
         self.afq_resample_points = afq_resample_points
         # Handle n_jobs: -1 means use all CPUs, otherwise use specified value
         if n_jobs == -1:
-            import multiprocessing
             self.n_jobs = multiprocessing.cpu_count()
         else:
             self.n_jobs = max(1, n_jobs) if n_jobs is not None else 1
@@ -769,6 +769,7 @@ class TractographyVisualizer:
         atlas_file: str | Path,
         *,
         atlas_ref_img: str | Path | None = None,
+        ref_img: str | Path | None = None,  # Alias for atlas_ref_img
         flip_lr: bool = False,
         views: list[str] | None = None,
         output_dir: str | Path | None = None,
@@ -839,10 +840,10 @@ class TractographyVisualizer:
         """
         # Determine reference image for atlas coordinate transformation
         # If atlas is in different space (e.g., MNI), use atlas_ref_img
-        if atlas_ref_img is None:
-            atlas_ref_img = self._reference_image
-        else:
-            atlas_ref_img = Path(atlas_ref_img)
+        # Support both atlas_ref_img and ref_img (alias) for backward compatibility
+        if atlas_ref_img is None and ref_img is not None:
+            atlas_ref_img = ref_img
+        atlas_ref_img = self._reference_image if atlas_ref_img is None else Path(atlas_ref_img)
 
         # Use standard anatomical view angles from utils
         view_angles = ANATOMICAL_VIEW_ANGLES
@@ -2233,6 +2234,7 @@ class TractographyVisualizer:
         tract_file: str | Path,
         ref_img: str | Path | None = None,
         *,
+        ref_file: str | Path | None = None,  # Alias for ref_img
         output_dir: str | Path | None = None,
     ) -> Path:
         """Generate a GIF animation of rotating tractography.
@@ -2291,6 +2293,10 @@ class TractographyVisualizer:
         if gif_filename.exists():
             logger.debug("Skipping generation of %s (file already exists)", gif_filename)
             return gif_filename
+
+        # Support both ref_img and ref_file (alias) for backward compatibility
+        if ref_img is None and ref_file is not None:
+            ref_img = ref_file
 
         try:
             # Load tract and get streamlines for rotation
@@ -2437,6 +2443,7 @@ class TractographyVisualizer:
         tract_files: list[str | Path],
         ref_img: str | Path | None = None,
         *,
+        ref_file: str | Path | None = None,  # Alias for ref_img
         output_dir: str | Path | None = None,
         remove_gifs: bool = True,
     ) -> dict[str, Path]:
@@ -2471,6 +2478,10 @@ class TractographyVisualizer:
         """
         if not tract_files:
             raise InvalidInputError("No tract files provided.")
+
+        # Support both ref_img and ref_file (alias) for backward compatibility
+        if ref_img is None and ref_file is not None:
+            ref_img = ref_file
 
         if output_dir is None:
             if self._output_directory is None:
@@ -2537,6 +2548,7 @@ class TractographyVisualizer:
         atlas_files: dict[str, str | Path] | None,
         metric_files: dict[str, dict[str, str | Path]] | None,
         atlas_ref_img: str | Path | None,
+        *,
         flip_lr: bool,
         skip_checks: list[str],
         **kwargs: Any,
@@ -2652,9 +2664,7 @@ class TractographyVisualizer:
 
             # 5. Shape similarity (uses MNI space tracts)
             if (
-                "shape_similarity" not in skip_checks
-                and atlas_files is not None
-                and subjects_mni_space is not None
+                "shape_similarity" not in skip_checks and atlas_files is not None and subjects_mni_space is not None
             ) and (
                 subject_id in subjects_mni_space
                 and tract_name in subjects_mni_space[subject_id]
@@ -2724,9 +2734,7 @@ class TractographyVisualizer:
 
             # 7. Bundle assignment (uses MNI space tracts and atlas files as model files)
             if (
-                "bundle_assignment" not in skip_checks
-                and atlas_files is not None
-                and subjects_mni_space is not None
+                "bundle_assignment" not in skip_checks and atlas_files is not None and subjects_mni_space is not None
             ) and (
                 subject_id in subjects_mni_space
                 and tract_name in subjects_mni_space[subject_id]
@@ -2754,8 +2762,8 @@ class TractographyVisualizer:
                         e,
                     )
 
-        except (OSError, ValueError, RuntimeError) as e:
-            logger.exception("Error processing %s/%s: %s", subject_id, tract_name, e)
+        except (OSError, ValueError, RuntimeError):
+            logger.exception("Error processing %s/%s", subject_id, tract_name)
         finally:
             # Clean up memory after processing this tract
             gc.collect()
@@ -2809,9 +2817,9 @@ class TractographyVisualizer:
         ref_img : str | Path | dict[str, str | Path] | None, optional
             Reference image(s) for subjects. Can be:
             - A single path (str | Path): Used for all subjects
-            - A dictionary mapping subject IDs to reference images: 
+            - A dictionary mapping subject IDs to reference images:
               {subject_id: ref_image_path}
-            - None: Uses the reference image set during initialization or via 
+            - None: Uses the reference image set during initialization or via
               `set_reference_image()` for all subjects
             Example for per-subject reference images:
             {"sub-001": "path/to/sub-001_t1w.nii.gz", "sub-002": "path/to/sub-002_t1w.nii.gz"}
@@ -2957,10 +2965,7 @@ class TractographyVisualizer:
                     "set_reference_image() method, or pass it as an argument.",
                 )
             # Use instance reference image for all subjects
-            subject_ref_imgs: dict[str, Path] = {
-                subject_id: self._reference_image
-                for subject_id in subjects_original_space.keys()
-            }
+            subject_ref_imgs: dict[str, Path] = dict.fromkeys(subjects_original_space.keys(), self._reference_image)
         elif isinstance(ref_img, dict):
             # Dictionary mapping subject IDs to reference images
             subject_ref_imgs = {subject_id: Path(path) for subject_id, path in ref_img.items()}
@@ -2968,15 +2973,12 @@ class TractographyVisualizer:
             missing = set(subjects_original_space.keys()) - set(subject_ref_imgs.keys())
             if missing:
                 raise InvalidInputError(
-                    f"Missing reference images for subjects: {', '.join(sorted(missing))}"
+                    f"Missing reference images for subjects: {', '.join(sorted(missing))}",
                 )
         else:
             # Single reference image for all subjects
             single_ref_img = Path(ref_img)
-            subject_ref_imgs = {
-                subject_id: single_ref_img
-                for subject_id in subjects_original_space.keys()
-            }
+            subject_ref_imgs = dict.fromkeys(subjects_original_space.keys(), single_ref_img)
 
         # Set default skip_checks
         if skip_checks is None:
@@ -2986,7 +2988,6 @@ class TractographyVisualizer:
         if n_jobs is None:
             n_jobs = self.n_jobs
         elif n_jobs == -1:
-            import multiprocessing
             n_jobs = multiprocessing.cpu_count()
         else:
             n_jobs = max(1, n_jobs)
@@ -3057,9 +3058,9 @@ class TractographyVisualizer:
                         results[result_subject_id][result_tract_name] = tract_results
                         # Clean up the future reference
                         del tract_results
-                    except Exception as e:
+                    except Exception:
                         subject_id, tract_name = futures[future]
-                        logger.exception("Error processing %s/%s: %s", subject_id, tract_name, e)
+                        logger.exception("Error processing %s/%s", subject_id, tract_name)
                         if subject_id not in results:
                             results[subject_id] = {}
                         if tract_name not in results[subject_id]:
@@ -3067,7 +3068,7 @@ class TractographyVisualizer:
                     finally:
                         # Clean up future reference
                         del future
-                
+
                 # Force garbage collection after all parallel tasks complete
                 gc.collect()
         else:
@@ -3095,8 +3096,8 @@ class TractographyVisualizer:
                     # Clean up after each tract in sequential processing
                     gc.collect()
 
-        # Generate HTML report
-        html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
+            # Generate HTML report
+            html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
 
         # Convert Path objects to strings for HTML function
         results_for_html: dict[str, dict[str, dict[str, str]]] = {}
