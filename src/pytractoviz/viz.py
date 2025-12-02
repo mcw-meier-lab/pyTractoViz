@@ -87,11 +87,23 @@ class TractographyVisualizer:
 
     Examples
     --------
+    Single subject usage:
     >>> visualizer = TractographyVisualizer(
     ...     reference_image="path/to/t1w.nii.gz", output_directory="output/"
     ... )
     >>> visualizer.generate_videos(
     ...     tract_files=["tract1.trk", "tract2.trk"], ref_file="t1w.nii.gz"
+    ... )
+
+    Multiple subjects usage (initialize once, set data per subject):
+    >>> visualizer = TractographyVisualizer(output_directory="output/")
+    >>> # Process subject 1
+    >>> visualizer.generate_videos(
+    ...     tract_files=["subj1_tract1.trk"], ref_file="subj1_t1w.nii.gz"
+    ... )
+    >>> # Process subject 2
+    >>> visualizer.generate_videos(
+    ...     tract_files=["subj2_tract1.trk"], ref_file="subj2_t1w.nii.gz"
     ... )
     """
 
@@ -447,6 +459,7 @@ class TractographyVisualizer:
     def calc_cci(
         self,
         tract: StatefulTractogram,
+        ref_img: str | Path | None = None,
     ) -> tuple[np.ndarray, StatefulTractogram]:
         """Calculate Cluster Confidence Index (CCI) for tractography.
 
@@ -454,6 +467,9 @@ class TractographyVisualizer:
         ----------
         tract : StatefulTractogram
             The tractography data.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization or via `set_reference_image()`.
 
         Returns
         -------
@@ -465,12 +481,21 @@ class TractographyVisualizer:
         Raises
         ------
         InvalidInputError
-            If the tractogram is empty or processing fails.
+            If the tractogram is empty or processing fails, or if no reference
+            image is provided and none was set.
         TractographyVisualizationError
             If calculation fails.
         """
         if not tract.streamlines or len(tract.streamlines) == 0:
             raise InvalidInputError("Tractogram is empty.")
+
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
 
         try:
             lengths = list(length(tract.streamlines))
@@ -497,7 +522,7 @@ class TractographyVisualizer:
 
             # Filter CCI array to match kept streamlines
             keep_cci = cci[keep_mask]
-            keep_tract = StatefulTractogram(keep_streamlines, nib.load(str(self._reference_image)), Space.RASMM)
+            keep_tract = StatefulTractogram(keep_streamlines, nib.load(str(ref_img)), Space.RASMM)
 
         except TractographyVisualizationError:
             raise
@@ -528,7 +553,7 @@ class TractographyVisualizer:
             Path to the tractography file.
         ref_img : str | Path | None, optional
             Path to the reference image. If None, uses the reference image
-            set during initialization.
+            set during initialization or via `set_reference_image()`.
         views : list[str] | None, optional
             List of views to generate. Options: "coronal", "axial", "sagittal".
             If None, generates all three views. Default is None.
@@ -594,6 +619,16 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
+
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
@@ -658,7 +693,6 @@ class TractographyVisualizer:
     def generate_atlas_views(
         self,
         atlas_file: str | Path,
-        ref_img: str | Path | None = None,
         *,
         atlas_ref_img: str | Path | None = None,
         flip_lr: bool = False,
@@ -678,12 +712,9 @@ class TractographyVisualizer:
         ----------
         atlas_file : str | Path
             Path to the atlas tractography file.
-        ref_img : str | Path | None, optional
-            Path to the reference image for visualization (glass brain).
-            If None, uses the reference image set during initialization.
         atlas_ref_img : str | Path | None, optional
             Path to the reference image that matches the atlas coordinate space
-            (e.g., MNI template if atlas is in MNI space). If None, uses ref_img.
+            (e.g., MNI template if atlas is in MNI space).
             This is important if the atlas is in a different space (e.g., MNI)
             than the subject reference image.
         flip_lr: bool, optional
@@ -735,7 +766,9 @@ class TractographyVisualizer:
         # Determine reference image for atlas coordinate transformation
         # If atlas is in different space (e.g., MNI), use atlas_ref_img
         if atlas_ref_img is None:
-            atlas_ref_img = ref_img
+            atlas_ref_img = self._reference_image
+        else:
+            atlas_ref_img = Path(atlas_ref_img)
 
         # Use standard anatomical view angles from utils
         view_angles = ANATOMICAL_VIEW_ANGLES
@@ -774,14 +807,14 @@ class TractographyVisualizer:
             atlas_tract.to_rasmm()
 
             # Load reference image
-            ref_img_obj = nib.load(str(ref_img))
+            atlas_ref_img_obj = nib.load(str(atlas_ref_img))
 
             # Transform atlas streamlines to visualization reference space
             # The atlas tract is already in RASMM after to_rasmm(), so we transform
             # directly to the visualization reference space
             atlas_streamlines = transform_streamlines(
                 atlas_tract.streamlines,
-                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+                np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
             # Apply left-right flip if needed (common when atlas is in MNI space)
@@ -807,7 +840,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
 
                 # Create scene using helper method
-                scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+                scene, _ = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
 
                 # Create actor with original streamlines using helper method
                 tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
@@ -912,6 +945,16 @@ class TractographyVisualizer:
         else:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
+
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
 
         # Use standard anatomical view angles from utils
         view_angles = ANATOMICAL_VIEW_ANGLES
@@ -1131,6 +1174,16 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
+
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
@@ -1349,7 +1402,6 @@ class TractographyVisualizer:
         self,
         tract_file: str | Path,
         atlas_file: str | Path,
-        ref_img: str | Path | None = None,
         *,
         atlas_ref_img: str | Path | None = None,
         flip_lr: bool = False,
@@ -1371,13 +1423,9 @@ class TractographyVisualizer:
             Path to the subject tractography file.
         atlas_file : str | Path
             Path to the atlas tractography file.
-        ref_img : str | Path | None, optional
-            Path to the reference image. If None, uses the reference image
-            set during initialization.
         atlas_ref_img : str | Path | None, optional
             Path to the reference image that matches the atlas coordinate space
-            (e.g., MNI template if atlas is in MNI space). If None, assumes atlas
-            is in the same space as the subject tract.
+            (e.g., MNI template if atlas is in MNI space).
         flip_lr : bool, optional
             Whether to flip left-right (X-axis) when transforming atlas.
             Default is False.
@@ -1465,39 +1513,23 @@ class TractographyVisualizer:
                 raise InvalidInputError("Atlas tract is empty.")
 
             # Load reference images and transform tracts to same space
-            ref_img_obj = nib.load(str(ref_img))
+            atlas_ref_img_obj = nib.load(str(atlas_ref_img))
 
             # Transform subject tract to reference space
             subject_streamlines = transform_streamlines(
                 tract.streamlines,
-                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+                np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
-            # Transform atlas to subject space if needed
-            if atlas_ref_img is not None:
-                atlas_ref_img_obj = nib.load(str(atlas_ref_img))
-
-                # Transform atlas streamlines to subject reference space
-                atlas_streamlines = transform_streamlines(
-                    atlas_tract.streamlines,
-                    np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+            # No transformation needed, use streamlines directly
+            atlas_streamlines = transform_streamlines(
+                atlas_tract.streamlines,
+                np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+            if flip_lr:
+                atlas_streamlines = Streamlines(
+                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
                 )
-
-                # Apply left-right flip if needed
-                if flip_lr:
-                    atlas_streamlines = Streamlines(
-                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
-                    )
-            else:
-                # No transformation needed, use streamlines directly
-                atlas_streamlines = transform_streamlines(
-                    atlas_tract.streamlines,
-                    np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
-                )
-                if flip_lr:
-                    atlas_streamlines = Streamlines(
-                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
-                    )
 
             # Calculate combined centroid for rotation (from both tracts)
             # Calculate combined centroid using utility function
@@ -1508,7 +1540,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
 
                 # Create scene using helper method
-                scene, brain_actor = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+                scene, brain_actor = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
 
                 # Add subject tract with subject color (single color for all streamlines)
                 # Use original streamlines - camera handles view
@@ -1649,6 +1681,16 @@ class TractographyVisualizer:
         else:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
+
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
 
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
@@ -1893,6 +1935,16 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
+
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
@@ -2053,7 +2105,7 @@ class TractographyVisualizer:
         self,
         name: str,
         tract_file: str | Path,
-        ref_file: str | Path | None = None,
+        ref_img: str | Path | None = None,
         *,
         output_dir: str | Path | None = None,
     ) -> Path:
@@ -2065,7 +2117,7 @@ class TractographyVisualizer:
             Base name for the output GIF file (without extension).
         tract_file : str | Path
             Path to the tractography file.
-        ref_file : str | Path | None, optional
+        ref_img : str | Path | None, optional
             Path to the reference image. If None, uses the reference image
             set during initialization.
         output_dir : str | Path | None, optional
@@ -2086,13 +2138,15 @@ class TractographyVisualizer:
         TractographyVisualizationError
             If GIF generation fails.
         """
-        if ref_file is None:
+        if ref_img is None:
             if self._reference_image is None:
                 raise InvalidInputError(
                     "No reference image provided. Set it via constructor or "
                     "set_reference_image() method, or pass it as an argument.",
                 )
-            ref_file = self._reference_image
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
 
         if output_dir is None:
             if self._output_directory is None:
@@ -2111,7 +2165,7 @@ class TractographyVisualizer:
             # Load tract and get streamlines for rotation
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
             tract.to_rasmm()
-            ref_img_obj = nib.load(str(ref_file))
+            ref_img_obj = nib.load(str(ref_img))
             tract_streamlines = transform_streamlines(
                 tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
@@ -2119,7 +2173,7 @@ class TractographyVisualizer:
 
             # Create initial actors
             tract_actor = actor.line(tract_streamlines)
-            brain_actor = self.get_glass_brain(ref_file)
+            brain_actor = self.get_glass_brain(ref_img)
             scene = window.Scene()
             scene.add(brain_actor)
             scene.add(tract_actor)
@@ -2245,7 +2299,7 @@ class TractographyVisualizer:
     def generate_videos(
         self,
         tract_files: list[str | Path],
-        ref_file: str | Path | None = None,
+        ref_img: str | Path | None = None,
         *,
         output_dir: str | Path | None = None,
         remove_gifs: bool = True,
@@ -2256,7 +2310,7 @@ class TractographyVisualizer:
         ----------
         tract_files : list[str | Path]
             List of paths to tractography files.
-        ref_file : str | Path | None, optional
+        ref_img : str | Path | None, optional
             Path to the reference image. If None, uses the reference image
             set during initialization.
         output_dir : str | Path | None, optional
@@ -2293,6 +2347,16 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
+
         tract_videos: dict[str, Path] = {}
 
         for tract_file in tract_files:
@@ -2303,7 +2367,7 @@ class TractographyVisualizer:
                 tract_gif = self.generate_gif(
                     name=tract_name,
                     tract_file=tract_path,
-                    ref_file=ref_file,
+                    ref_img=ref_img,
                     output_dir=output_dir,
                 )
                 tract_mp4 = output_dir / f"{tract_name}.mp4"
@@ -2323,6 +2387,7 @@ class TractographyVisualizer:
     def run_quality_check_workflow(
         self,
         subjects_original_space: dict[str, dict[str, str | Path]],
+        ref_img: str | Path | dict[str, str | Path] | None = None,
         *,
         subjects_mni_space: dict[str, dict[str, str | Path]] | None = None,
         atlas_files: dict[str, str | Path] | None = None,
@@ -2362,6 +2427,15 @@ class TractographyVisualizer:
                 }
             }
             Used for: anatomical views, CCI, before/after CCI, AFQ profiles.
+        ref_img : str | Path | dict[str, str | Path] | None, optional
+            Reference image(s) for subjects. Can be:
+            - A single path (str | Path): Used for all subjects
+            - A dictionary mapping subject IDs to reference images: 
+              {subject_id: ref_image_path}
+            - None: Uses the reference image set during initialization or via 
+              `set_reference_image()` for all subjects
+            Example for per-subject reference images:
+            {"sub-001": "path/to/sub-001_t1w.nii.gz", "sub-002": "path/to/sub-002_t1w.nii.gz"}
         subjects_mni_space : dict[str, dict[str, str | Path]] | None, optional
             Dictionary mapping subject IDs to their tract files in MNI/atlas space.
             Format: {subject_id: {tract_name: tract_file_path}}
@@ -2436,28 +2510,43 @@ class TractographyVisualizer:
 
         Examples
         --------
-        >>> visualizer = TractographyVisualizer(
-        ...     reference_image="t1w.nii.gz", output_directory="output/"
-        ... )
-        >>> # Tracts in original space (for most checks)
+        Single subject or all subjects share same reference image:
+        >>> visualizer = TractographyVisualizer(output_directory="output/")
         >>> subjects_original = {
         ...     "sub-001": {
         ...         "AF_L": "sub-001_AF_L_original.trk",
         ...         "AF_R": "sub-001_AF_R_original.trk",
         ...     }
         ... }
-        >>> # Tracts in MNI space (for shape similarity and bundle assignment)
-        >>> subjects_mni = {
-        ...     "sub-001": {"AF_L": "sub-001_AF_L_mni.trk", "AF_R": "sub-001_AF_R_mni.trk"}
+        >>> results = visualizer.run_quality_check_workflow(
+        ...     subjects_original_space=subjects_original,
+        ...     ref_img="shared_t1w.nii.gz",  # Single image for all subjects
+        ...     html_output="quality_report.html",
+        ... )
+
+        Multiple subjects with different reference images:
+        >>> visualizer = TractographyVisualizer(output_directory="output/")
+        >>> subjects_original = {
+        ...     "sub-001": {"AF_L": "sub-001_AF_L_original.trk"},
+        ...     "sub-002": {"AF_L": "sub-002_AF_L_original.trk"},
         ... }
-        >>> # Atlas files are shared across all subjects
-        >>> atlas_files = {"AF_L": "atlas_AF_L.trk", "AF_R": "atlas_AF_R.trk"}
-        >>> # Metric files are per-subject (all tracts in a subject use the same metrics)
+        >>> # Each subject has its own reference image
+        >>> ref_images = {
+        ...     "sub-001": "sub-001_t1w.nii.gz",
+        ...     "sub-002": "sub-002_t1w.nii.gz",
+        ... }
+        >>> subjects_mni = {
+        ...     "sub-001": {"AF_L": "sub-001_AF_L_mni.trk"},
+        ...     "sub-002": {"AF_L": "sub-002_AF_L_mni.trk"},
+        ... }
+        >>> atlas_files = {"AF_L": "atlas_AF_L.trk"}
         >>> metric_files = {
-        ...     "sub-001": {"FA": "sub-001_FA.nii.gz", "MD": "sub-001_MD.nii.gz"}
+        ...     "sub-001": {"FA": "sub-001_FA.nii.gz"},
+        ...     "sub-002": {"FA": "sub-002_FA.nii.gz"},
         ... }
         >>> results = visualizer.run_quality_check_workflow(
         ...     subjects_original_space=subjects_original,
+        ...     ref_img=ref_images,  # Dictionary mapping subject_id -> ref_image
         ...     subjects_mni_space=subjects_mni,
         ...     atlas_files=atlas_files,
         ...     metric_files=metric_files,
@@ -2476,6 +2565,35 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Handle reference image(s) - can be single path or dict mapping subject_id -> path
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            # Use instance reference image for all subjects
+            subject_ref_imgs: dict[str, Path] = {
+                subject_id: self._reference_image
+                for subject_id in subjects_original_space.keys()
+            }
+        elif isinstance(ref_img, dict):
+            # Dictionary mapping subject IDs to reference images
+            subject_ref_imgs = {subject_id: Path(path) for subject_id, path in ref_img.items()}
+            # Validate all subjects have reference images
+            missing = set(subjects_original_space.keys()) - set(subject_ref_imgs.keys())
+            if missing:
+                raise InvalidInputError(
+                    f"Missing reference images for subjects: {', '.join(sorted(missing))}"
+                )
+        else:
+            # Single reference image for all subjects
+            single_ref_img = Path(ref_img)
+            subject_ref_imgs = {
+                subject_id: single_ref_img
+                for subject_id in subjects_original_space.keys()
+            }
+
         # Set default skip_checks
         if skip_checks is None:
             skip_checks = []
@@ -2485,6 +2603,8 @@ class TractographyVisualizer:
 
         # Process each subject
         for subject_id, tracts in subjects_original_space.items():
+            # Get subject-specific reference image
+            subject_ref_img = subject_ref_imgs[subject_id]
             results[subject_id] = {}
 
             # Create subject-specific output directory
@@ -2511,6 +2631,7 @@ class TractographyVisualizer:
                             anatomical_views = self.generate_anatomical_views(
                                 tract_file,
                                 output_dir=tract_output_dir,
+                                ref_img=subject_ref_img,
                                 **kwargs,
                             )
                             # Add anatomical views to results
@@ -2532,6 +2653,7 @@ class TractographyVisualizer:
                             cci_plots = self.plot_cci(
                                 tract_file,  # type: ignore[arg-type]
                                 output_dir=tract_output_dir,
+                                ref_img=subject_ref_img,
                                 **kwargs,
                             )
                             # Add CCI plots to results
@@ -2551,6 +2673,7 @@ class TractographyVisualizer:
                             before_after_views = self.compare_before_after_cci(
                                 tract_file,
                                 output_dir=tract_output_dir,
+                                ref_img=subject_ref_img,
                                 **kwargs,
                             )
                             # Add before/after views to results
@@ -2661,6 +2784,7 @@ class TractographyVisualizer:
                                     metric_name,
                                     tract_file,
                                     model_file,
+                                    ref_img=subject_ref_img,
                                     output_dir=tract_output_dir,
                                     **kwargs,
                                 )
@@ -2694,6 +2818,7 @@ class TractographyVisualizer:
                                 tract_file_mni,
                                 model_file,
                                 output_dir=tract_output_dir,
+                                ref_img=subject_ref_img,
                                 **kwargs,
                             )
                             # Add assignment views to results
