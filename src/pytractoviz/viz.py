@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import logging
 import multiprocessing
@@ -70,11 +71,19 @@ def _process_tract_worker(
     This function creates a new visualizer instance and processes a single tract.
     Returns (subject_id, tract_name, results_dict).
     """
-    # Create a new visualizer instance in this worker process
-    visualizer = TractographyVisualizer(**visualizer_params)
+    visualizer = None
+    results: dict[str, str | Path] = {}
 
-    # Process the tract
     try:
+        # Initialize VTK offscreen rendering in worker process
+        # This is important for headless environments and multiprocessing
+        with contextlib.suppress(AttributeError, RuntimeError):
+            vtk.vtkObject.GlobalWarningDisplayOff()  # Suppress VTK warnings
+
+        # Create a new visualizer instance in this worker process
+        visualizer = TractographyVisualizer(**visualizer_params)
+
+        # Process the tract
         results = visualizer._process_single_tract(
             subject_id=subject_id,
             tract_name=tract_name,
@@ -89,9 +98,15 @@ def _process_tract_worker(
             skip_checks=skip_checks,
             **kwargs,
         )
+    except Exception:
+        # Log the error but don't re-raise to prevent process pool from breaking
+        logger.exception("Error in worker process for %s/%s", subject_id, tract_name)
+        # Return empty results dict on error
+        results = {}
     finally:
         # Clean up the visualizer instance and force garbage collection
-        del visualizer
+        if visualizer is not None:
+            del visualizer
         gc.collect()
 
     return (subject_id, tract_name, results)
@@ -3027,50 +3042,80 @@ class TractographyVisualizer:
         # Process tasks in parallel or sequentially
         if n_jobs > 1 and len(tasks) > 1:
             logger.info("Processing %d tracts using %d workers", len(tasks), n_jobs)
-            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-                futures = {
-                    executor.submit(
-                        _process_tract_worker,
-                        subject_id=subject_id,
-                        tract_name=tract_name,
-                        tract_file=tract_file,
-                        subject_ref_img=subject_ref_img,
-                        tract_output_dir=tract_output_dir,
-                        subjects_mni_space=subjects_mni_space,
-                        atlas_files=atlas_files,
-                        metric_files=metric_files,
-                        atlas_ref_img=atlas_ref_img,
-                        flip_lr=flip_lr,
-                        skip_checks=skip_checks,
-                        visualizer_params=visualizer_params,
-                        **kwargs,
-                    ): (subject_id, tract_name)
-                    for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks
-                }
+            try:
+                with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                    futures = {
+                        executor.submit(
+                            _process_tract_worker,
+                            subject_id=subject_id,
+                            tract_name=tract_name,
+                            tract_file=tract_file,
+                            subject_ref_img=subject_ref_img,
+                            tract_output_dir=tract_output_dir,
+                            subjects_mni_space=subjects_mni_space,
+                            atlas_files=atlas_files,
+                            metric_files=metric_files,
+                            atlas_ref_img=atlas_ref_img,
+                            flip_lr=flip_lr,
+                            skip_checks=skip_checks,
+                            visualizer_params=visualizer_params,
+                            **kwargs,
+                        ): (subject_id, tract_name)
+                        for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks
+                    }
 
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    subject_id, tract_name = futures[future]
-                    try:
-                        result_subject_id, result_tract_name, tract_results = future.result()
-                        if result_subject_id not in results:
-                            results[result_subject_id] = {}
-                        results[result_subject_id][result_tract_name] = tract_results
-                        # Clean up the future reference
-                        del tract_results
-                    except Exception:
+                    # Collect results as they complete
+                    for future in as_completed(futures):
                         subject_id, tract_name = futures[future]
-                        logger.exception("Error processing %s/%s", subject_id, tract_name)
-                        if subject_id not in results:
-                            results[subject_id] = {}
-                        if tract_name not in results[subject_id]:
-                            results[subject_id][tract_name] = {}
-                    finally:
-                        # Clean up future reference
-                        del future
+                        try:
+                            result_subject_id, result_tract_name, tract_results = future.result(timeout=None)
+                            if result_subject_id not in results:
+                                results[result_subject_id] = {}
+                            results[result_subject_id][result_tract_name] = tract_results
+                            # Clean up the future reference
+                            del tract_results
+                        except Exception:
+                            subject_id, tract_name = futures[future]
+                            logger.exception("Error processing %s/%s", subject_id, tract_name)
+                            if subject_id not in results:
+                                results[subject_id] = {}
+                            if tract_name not in results[subject_id]:
+                                results[subject_id][tract_name] = {}
+                        finally:
+                            # Clean up future reference
+                            del future
 
-                # Force garbage collection after all parallel tasks complete
-                gc.collect()
+                    # Force garbage collection after all parallel tasks complete
+                    gc.collect()
+            except RuntimeError:
+                # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
+                # and other runtime errors that might occur with process pools
+                logger.exception("Process pool error occurred. Falling back to sequential processing")
+                # Fall back to sequential processing if process pool fails
+                logger.info("Processing %d tracts sequentially (fallback)", len(tasks))
+                for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks:
+                    if subject_id not in results:
+                        results[subject_id] = {}
+                    try:
+                        results[subject_id][tract_name] = self._process_single_tract(
+                            subject_id=subject_id,
+                            tract_name=tract_name,
+                            tract_file=tract_file,
+                            subject_ref_img=subject_ref_img,
+                            tract_output_dir=tract_output_dir,
+                            subjects_mni_space=subjects_mni_space,
+                            atlas_files=atlas_files,
+                            metric_files=metric_files,
+                            atlas_ref_img=atlas_ref_img,
+                            flip_lr=flip_lr,
+                            skip_checks=skip_checks,
+                            **kwargs,
+                        )
+                    except Exception:
+                        logger.exception("Error processing %s/%s in fallback mode", subject_id, tract_name)
+                        results[subject_id][tract_name] = {}
+                    finally:
+                        gc.collect()
         else:
             # Sequential processing
             logger.info("Processing %d tracts sequentially", len(tasks))
