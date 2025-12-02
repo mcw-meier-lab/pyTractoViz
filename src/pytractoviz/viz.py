@@ -98,9 +98,25 @@ def _process_tract_worker(
             skip_checks=skip_checks,
             **kwargs,
         )
-    except Exception:
+    except (OSError, ValueError, RuntimeError, MemoryError) as e:
+        # Catch specific exceptions that might cause process crashes
         # Log the error but don't re-raise to prevent process pool from breaking
-        logger.exception("Error in worker process for %s/%s", subject_id, tract_name)
+        logger.exception(
+            "Error in worker process for %s/%s (%s)",
+            subject_id,
+            tract_name,
+            type(e).__name__,
+        )
+        # Return empty results dict on error
+        results = {}
+    except Exception as e:
+        # Catch any other unexpected exceptions
+        logger.exception(
+            "Unexpected error in worker process for %s/%s (%s)",
+            subject_id,
+            tract_name,
+            type(e).__name__,
+        )
         # Return empty results dict on error
         results = {}
     finally:
@@ -3065,6 +3081,7 @@ class TractographyVisualizer:
                     }
 
                     # Collect results as they complete
+                    broken_pool_detected = False
                     for future in as_completed(futures):
                         subject_id, tract_name = futures[future]
                         try:
@@ -3074,9 +3091,34 @@ class TractographyVisualizer:
                             results[result_subject_id][result_tract_name] = tract_results
                             # Clean up the future reference
                             del tract_results
-                        except Exception:
-                            subject_id, tract_name = futures[future]
-                            logger.exception("Error processing %s/%s", subject_id, tract_name)
+                        except RuntimeError as e:
+                            # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
+                            # Check if this is a BrokenProcessPool by checking the error message
+                            error_msg = str(e)
+                            if "BrokenProcessPool" in error_msg or "process pool" in error_msg.lower():
+                                broken_pool_detected = True
+                                logger.exception(
+                                    "BrokenProcessPool detected for %s/%s. Worker process may have crashed",
+                                    subject_id,
+                                    tract_name,
+                                )
+                            else:
+                                logger.exception("RuntimeError processing %s/%s", subject_id, tract_name)
+                            if subject_id not in results:
+                                results[subject_id] = {}
+                            if tract_name not in results[subject_id]:
+                                results[subject_id][tract_name] = {}
+                        except (OSError, ValueError) as e:
+                            # OSError catches system-level errors
+                            # ValueError catches other processing errors
+                            logger.exception("Error processing %s/%s: %s", subject_id, tract_name, type(e).__name__)
+                            if subject_id not in results:
+                                results[subject_id] = {}
+                            if tract_name not in results[subject_id]:
+                                results[subject_id][tract_name] = {}
+                        except Exception as e:
+                            # Catch any other unexpected exceptions
+                            logger.exception("Unexpected error processing %s/%s: %s", subject_id, tract_name, type(e).__name__)
                             if subject_id not in results:
                                 results[subject_id] = {}
                             if tract_name not in results[subject_id]:
@@ -3084,6 +3126,12 @@ class TractographyVisualizer:
                         finally:
                             # Clean up future reference
                             del future
+
+                    # If we detected a broken process pool, break out and fall back to sequential
+                    if broken_pool_detected:
+                        # Raise error to trigger fallback to sequential processing
+                        # The exception will be caught by the outer try-except block
+                        raise RuntimeError("BrokenProcessPool detected, falling back to sequential processing")  # noqa: TRY301
 
                     # Force garbage collection after all parallel tasks complete
                     gc.collect()
