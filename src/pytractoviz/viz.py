@@ -652,6 +652,12 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"{tract_name}_{view_name}.png"
 
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
+
                 # Create scene using helper method
                 scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
 
@@ -839,6 +845,12 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
 
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
+
                 # Create scene using helper method
                 scene, _ = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
 
@@ -977,14 +989,18 @@ class TractographyVisualizer:
             hist_path = Path(hist_file)
             hist_path.parent.mkdir(parents=True, exist_ok=True)
 
-            fig, ax = plt.subplots(1, figsize=(8, 6))
-            ax.hist(cci, bins=bins, histtype="step")
-            ax.set_xlabel("CCI")
-            ax.set_ylabel("# streamlines")
-            ax.set_title("CCI Distribution")
-            ax.grid(visible=True, alpha=0.3)
-            fig.savefig(str(hist_path), dpi=150, bbox_inches="tight")
-            plt.close(fig)
+            # Skip histogram if file already exists
+            if not hist_path.exists():
+                fig, ax = plt.subplots(1, figsize=(8, 6))
+                ax.hist(cci, bins=bins, histtype="step")
+                ax.set_xlabel("CCI")
+                ax.set_ylabel("# streamlines")
+                ax.set_title("CCI Distribution")
+                ax.grid(visible=True, alpha=0.3)
+                fig.savefig(str(hist_path), dpi=150, bbox_inches="tight")
+                plt.close(fig)
+            else:
+                logger.debug("Skipping generation of %s (file already exists)", hist_path)
 
             generated_views["histogram"] = hist_path
 
@@ -1026,6 +1042,12 @@ class TractographyVisualizer:
             # Generate each requested view
             for view_name in views_to_generate:
                 output_image = output_dir / f"cci_{view_name}.png"
+
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
 
                 # Create scene
                 scene = window.Scene()
@@ -1219,6 +1241,12 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
 
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
+
                 # Create scene using helper method
                 scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
 
@@ -1253,14 +1281,17 @@ class TractographyVisualizer:
 
             # Also create the profile line plot
             profile_plot_path = output_dir / f"{tract_name}_{metric_str}_profile.png"
-            fig, ax = plt.subplots(1, figsize=(8, 6))
-            ax.plot(profile)
-            ax.set_xlabel("Node along tract")
-            ax.set_ylabel(metric_str)
-            ax.set_title(f"AFQ Profile: {metric_str}")
-            ax.grid(visible=True, alpha=0.3)
-            fig.savefig(str(profile_plot_path), dpi=150, bbox_inches="tight")
-            plt.close(fig)
+            if not profile_plot_path.exists():
+                fig, ax = plt.subplots(1, figsize=(8, 6))
+                ax.plot(profile)
+                ax.set_xlabel("Node along tract")
+                ax.set_ylabel(metric_str)
+                ax.set_title(f"AFQ Profile: {metric_str}")
+                ax.grid(visible=True, alpha=0.3)
+                fig.savefig(str(profile_plot_path), dpi=150, bbox_inches="tight")
+                plt.close(fig)
+            else:
+                logger.debug("Skipping generation of %s (file already exists)", profile_plot_path)
 
             generated_views["profile_plot"] = profile_plot_path
 
@@ -1539,6 +1570,12 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
 
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
+
                 # Create scene using helper method
                 scene, brain_actor = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
 
@@ -1733,6 +1770,12 @@ class TractographyVisualizer:
             # Generate each requested view
             for view_name in views_to_generate:
                 output_image = output_dir / f"cci_before_after_{tract_name}_{view_name}.png"
+
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
 
                 # Create side-by-side scenes using helper methods
                 # Left side: Before CCI filtering
@@ -2044,6 +2087,12 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
 
+                # Skip if file already exists
+                if output_image.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                    generated_views[view_name] = output_image
+                    continue
+
                 # Create scene using helper method
                 scene, brain_actor = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
 
@@ -2161,6 +2210,11 @@ class TractographyVisualizer:
 
         gif_filename = output_dir / f"{name}.gif"
 
+        # Skip if file already exists
+        if gif_filename.exists():
+            logger.debug("Skipping generation of %s (file already exists)", gif_filename)
+            return gif_filename
+
         try:
             # Load tract and get streamlines for rotation
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
@@ -2275,6 +2329,11 @@ class TractographyVisualizer:
             mp4_path = Path(mp4_path)
             mp4_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Skip if file already exists
+        if mp4_path.exists():
+            logger.debug("Skipping conversion of %s to %s (file already exists)", gif_path, mp4_path)
+            return mp4_path
+
         try:
             reader = imageio.get_reader(str(gif_path_obj))
             writer = imageio.get_writer(
@@ -2363,6 +2422,13 @@ class TractographyVisualizer:
             try:
                 tract_path = Path(tract_file)
                 tract_name = tract_path.stem
+                tract_mp4 = output_dir / f"{tract_name}.mp4"
+
+                # Skip if MP4 already exists
+                if tract_mp4.exists():
+                    logger.debug("Skipping generation of %s (file already exists)", tract_mp4)
+                    tract_videos[tract_name] = tract_mp4
+                    continue
 
                 tract_gif = self.generate_gif(
                     name=tract_name,
@@ -2370,7 +2436,6 @@ class TractographyVisualizer:
                     ref_img=ref_img,
                     output_dir=output_dir,
                 )
-                tract_mp4 = output_dir / f"{tract_name}.mp4"
                 self.convert_gif_to_mp4(tract_gif, tract_mp4)
 
                 if remove_gifs:
