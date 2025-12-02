@@ -6,6 +6,8 @@ import gc
 import logging
 import os
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,53 @@ from pytractoviz.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _process_tract_worker(
+    subject_id: str,
+    tract_name: str,
+    tract_file: str | Path,
+    subject_ref_img: str | Path,
+    tract_output_dir: str | Path,
+    subjects_mni_space: dict[str, dict[str, str | Path]] | None,
+    atlas_files: dict[str, str | Path] | None,
+    metric_files: dict[str, dict[str, str | Path]] | None,
+    atlas_ref_img: str | Path | None,
+    flip_lr: bool,
+    skip_checks: list[str],
+    visualizer_params: dict[str, Any],
+    **kwargs: Any,
+) -> tuple[str, str, dict[str, str | Path]]:
+    """Worker function for parallel processing of tracts.
+
+    This function creates a new visualizer instance and processes a single tract.
+    Returns (subject_id, tract_name, results_dict).
+    """
+    # Create a new visualizer instance in this worker process
+    visualizer = TractographyVisualizer(**visualizer_params)
+    
+    # Process the tract
+    try:
+        results = visualizer._process_single_tract(
+            subject_id=subject_id,
+            tract_name=tract_name,
+            tract_file=tract_file,
+            subject_ref_img=Path(subject_ref_img),
+            tract_output_dir=Path(tract_output_dir),
+            subjects_mni_space=subjects_mni_space,
+            atlas_files=atlas_files,
+            metric_files=metric_files,
+            atlas_ref_img=atlas_ref_img,
+            flip_lr=flip_lr,
+            skip_checks=skip_checks,
+            **kwargs,
+        )
+    finally:
+        # Clean up the visualizer instance and force garbage collection
+        del visualizer
+        gc.collect()
+    
+    return (subject_id, tract_name, results)
+
+
 class TractographyVisualizationError(Exception):
     """Base exception for tractography visualization errors."""
 
@@ -84,6 +133,10 @@ class TractographyVisualizer:
         Minimum CCI value to keep streamlines. Default is 1.0.
     afq_resample_points : int, optional
         Number of points for AFQ resampling. Default is 100.
+    n_jobs : int, optional
+        Number of parallel jobs to run for processing multiple subjects/tracts.
+        Default is 1 (sequential processing). Use -1 to use all available CPUs.
+        Only used in `run_quality_check_workflow()`.
 
     Examples
     --------
@@ -119,6 +172,7 @@ class TractographyVisualizer:
         min_streamline_length: float = 40.0,
         cci_threshold: float = 1.0,
         afq_resample_points: int = 100,
+        n_jobs: int = 1,
     ) -> None:
         """Initialize the TractographyVisualizer."""
         self._reference_image: Path | None = None
@@ -136,6 +190,12 @@ class TractographyVisualizer:
         self.min_streamline_length = min_streamline_length
         self.cci_threshold = cci_threshold
         self.afq_resample_points = afq_resample_points
+        # Handle n_jobs: -1 means use all CPUs, otherwise use specified value
+        if n_jobs == -1:
+            import multiprocessing
+            self.n_jobs = multiprocessing.cpu_count()
+        else:
+            self.n_jobs = max(1, n_jobs) if n_jobs is not None else 1
 
     def set_reference_image(self, reference_image: str | Path) -> None:
         """Set the reference T1-weighted image.
@@ -648,6 +708,9 @@ class TractographyVisualizer:
             # Get centroid using utility function
             centroid = calculate_centroid(tract_streamlines)
 
+            # Clean up loaded objects that are no longer needed
+            del tract, ref_img_obj
+
             # Generate each requested view
             for view_name in views_to_generate:
                 output_image = output_dir / f"{tract_name}_{view_name}.png"
@@ -684,8 +747,13 @@ class TractographyVisualizer:
                     size=figure_size,
                 )
                 scene.clear()
+                del tract_actor
 
                 generated_views[view_name] = output_image
+
+            # Clean up remaining large objects
+            del tract_streamlines, streamline_colors
+            gc.collect()
 
         except TractographyVisualizationError:
             raise
@@ -876,8 +944,13 @@ class TractographyVisualizer:
                     size=figure_size,
                 )
                 scene.clear()
+                del tract_actor
 
                 generated_views[view_name] = output_image
+
+            # Clean up large objects
+            del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
+            gc.collect()
 
         except TractographyVisualizationError:
             raise
@@ -1098,6 +1171,10 @@ class TractographyVisualizer:
                 gc.collect()
 
                 generated_views[view_name] = output_image
+
+            # Clean up large objects after all views are generated
+            del keep_tract, tract_streamlines, cci
+            gc.collect()
 
         except TractographyVisualizationError:
             raise
@@ -2449,6 +2526,242 @@ class TractographyVisualizer:
 
         return tract_videos
 
+    def _process_single_tract(
+        self,
+        subject_id: str,
+        tract_name: str,
+        tract_file: str | Path,
+        subject_ref_img: Path,
+        tract_output_dir: Path,
+        subjects_mni_space: dict[str, dict[str, str | Path]] | None,
+        atlas_files: dict[str, str | Path] | None,
+        metric_files: dict[str, dict[str, str | Path]] | None,
+        atlas_ref_img: str | Path | None,
+        flip_lr: bool,
+        skip_checks: list[str],
+        **kwargs: Any,
+    ) -> dict[str, str | Path]:
+        """Process a single subject/tract combination.
+
+        This is a helper method used for parallel processing.
+        Returns a dictionary of results for this tract.
+        """
+        tract_results: dict[str, str | Path] = {}
+
+        try:
+            # 1. Standard anatomical views
+            if "anatomical_views" not in skip_checks:
+                try:
+                    anatomical_views = self.generate_anatomical_views(
+                        tract_file,
+                        output_dir=tract_output_dir,
+                        ref_img=subject_ref_img,
+                        **kwargs,
+                    )
+                    # Add anatomical views to results
+                    for view_name, view_path in anatomical_views.items():
+                        tract_results[f"anatomical_{view_name}"] = view_path
+                except (OSError, ValueError, RuntimeError) as e:
+                    logger.warning(
+                        "Failed to generate anatomical views for %s/%s: %s",
+                        subject_id,
+                        tract_name,
+                        e,
+                    )
+
+            # 2. CCI calculation and visualization
+            if "cci" not in skip_checks:
+                try:
+                    cci_plots = self.plot_cci(
+                        tract_file,  # type: ignore[arg-type]
+                        output_dir=tract_output_dir,
+                        ref_img=subject_ref_img,
+                        **kwargs,
+                    )
+                    # Add CCI plots to results
+                    for plot_type, plot_path in cci_plots.items():
+                        tract_results[f"cci_{plot_type}"] = plot_path
+                except (OSError, ValueError, RuntimeError) as e:
+                    logger.warning(
+                        "Failed to generate CCI plots for %s/%s: %s",
+                        subject_id,
+                        tract_name,
+                        e,
+                    )
+
+            # 3. Before/after CCI comparison
+            if "before_after_cci" not in skip_checks:
+                try:
+                    before_after_views = self.compare_before_after_cci(
+                        tract_file,
+                        output_dir=tract_output_dir,
+                        ref_img=subject_ref_img,
+                        **kwargs,
+                    )
+                    # Add before/after views to results
+                    for view_name, view_path in before_after_views.items():
+                        tract_results[f"before_after_cci_{view_name}"] = view_path
+                except (OSError, ValueError, RuntimeError) as e:
+                    logger.warning(
+                        "Failed to generate before/after CCI comparison for %s/%s: %s",
+                        subject_id,
+                        tract_name,
+                        e,
+                    )
+
+            # 4. Atlas comparison (uses MNI space tracts for subject views)
+            if "atlas_comparison" not in skip_checks and atlas_files is not None and tract_name in atlas_files:
+                try:
+                    atlas_file = atlas_files[tract_name]
+                    # Generate subject views in MNI space if available, otherwise skip
+                    if (
+                        subjects_mni_space is not None
+                        and subject_id in subjects_mni_space
+                        and tract_name in subjects_mni_space[subject_id]
+                    ):
+                        tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                        # Generate subject views in MNI space
+                        subject_mni_views = self.generate_anatomical_views(
+                            tract_file_mni,
+                            ref_img=atlas_ref_img,  # Use atlas ref image for MNI space
+                            output_dir=tract_output_dir,
+                            **kwargs,
+                        )
+                        # Add subject MNI views to results
+                        for view_name, view_path in subject_mni_views.items():
+                            tract_results[f"subject_mni_{view_name}"] = view_path
+
+                    # Generate atlas views
+                    atlas_views = self.generate_atlas_views(
+                        atlas_file,
+                        atlas_ref_img=atlas_ref_img,
+                        flip_lr=flip_lr,
+                        output_dir=tract_output_dir,
+                        **kwargs,
+                    )
+                    # Add atlas views to results
+                    for view_name, view_path in atlas_views.items():
+                        tract_results[f"atlas_{view_name}"] = view_path
+                except (OSError, ValueError, RuntimeError) as e:
+                    logger.warning(
+                        "Failed to generate atlas comparison views for %s/%s: %s",
+                        subject_id,
+                        tract_name,
+                        e,
+                    )
+
+            # 5. Shape similarity (uses MNI space tracts)
+            if (
+                "shape_similarity" not in skip_checks
+                and atlas_files is not None
+                and subjects_mni_space is not None
+            ) and (
+                subject_id in subjects_mni_space
+                and tract_name in subjects_mni_space[subject_id]
+                and tract_name in atlas_files
+            ):
+                try:
+                    # Use MNI space tract for shape similarity
+                    tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                    atlas_file = atlas_files[tract_name]
+                    # Calculate shape similarity score
+                    similarity_score = self.calculate_shape_similarity(
+                        tract_file_mni,
+                        atlas_file,
+                        atlas_ref_img=atlas_ref_img,
+                        flip_lr=flip_lr,
+                        **kwargs,
+                    )
+                    tract_results["shape_similarity_score"] = str(similarity_score)
+
+                    # Visualize shape similarity
+                    similarity_views = self.visualize_shape_similarity(
+                        tract_file_mni,
+                        atlas_file,
+                        atlas_ref_img=atlas_ref_img,
+                        flip_lr=flip_lr,
+                        output_dir=tract_output_dir,
+                        **kwargs,
+                    )
+                    # Add similarity views to results
+                    for view_name, view_path in similarity_views.items():
+                        tract_results[f"similarity_{view_name}"] = view_path
+                except (OSError, ValueError, RuntimeError, IndexError) as e:
+                    logger.warning(
+                        "Failed to calculate/visualize shape similarity for %s/%s: %s",
+                        subject_id,
+                        tract_name,
+                        e,
+                    )
+
+            # 6. AFQ profile (requires metric files per subject and atlas files as model files)
+            if ("afq_profile" not in skip_checks and metric_files is not None and atlas_files is not None) and (
+                subject_id in metric_files and tract_name in atlas_files
+            ):
+                model_file = atlas_files[tract_name]  # Use atlas file as model file
+                for metric_name, metric_file in metric_files[subject_id].items():
+                    try:
+                        afq_plots = self.plot_afq(
+                            metric_file,
+                            metric_name,
+                            tract_file,
+                            model_file,
+                            ref_img=subject_ref_img,
+                            output_dir=tract_output_dir,
+                            **kwargs,
+                        )
+                        # Add AFQ plots to results
+                        for plot_type, plot_path in afq_plots.items():
+                            tract_results[f"afq_{metric_name}_{plot_type}"] = plot_path
+                    except (OSError, ValueError, RuntimeError, IndexError) as e:
+                        logger.warning(
+                            "Failed to generate AFQ profile for %s/%s/%s: %s",
+                            subject_id,
+                            tract_name,
+                            metric_name,
+                            e,
+                        )
+
+            # 7. Bundle assignment (uses MNI space tracts and atlas files as model files)
+            if (
+                "bundle_assignment" not in skip_checks
+                and atlas_files is not None
+                and subjects_mni_space is not None
+            ) and (
+                subject_id in subjects_mni_space
+                and tract_name in subjects_mni_space[subject_id]
+                and tract_name in atlas_files
+            ):
+                try:
+                    # Use MNI space tract for bundle assignment
+                    tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                    model_file = atlas_files[tract_name]  # Use atlas file as model file
+                    assignment_views = self.visualize_bundle_assignment(
+                        tract_file_mni,
+                        model_file,
+                        output_dir=tract_output_dir,
+                        ref_img=subject_ref_img,
+                        **kwargs,
+                    )
+                    # Add assignment views to results
+                    for view_name, view_path in assignment_views.items():
+                        tract_results[f"assignment_{view_name}"] = view_path
+                except (OSError, ValueError, RuntimeError, IndexError) as e:
+                    logger.warning(
+                        "Failed to generate bundle assignment for %s/%s: %s",
+                        subject_id,
+                        tract_name,
+                        e,
+                    )
+
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.exception("Error processing %s/%s: %s", subject_id, tract_name, e)
+        finally:
+            # Clean up memory after processing this tract
+            gc.collect()
+
+        return tract_results
+
     def run_quality_check_workflow(
         self,
         subjects_original_space: dict[str, dict[str, str | Path]],
@@ -2462,6 +2775,7 @@ class TractographyVisualizer:
         output_dir: str | Path | None = None,
         html_output: str | Path | None = None,
         skip_checks: list[str] | None = None,
+        n_jobs: int | None = None,
         **kwargs: Any,
     ) -> dict[str, dict[str, dict[str, str | Path]]]:
         """Run comprehensive quality checks for multiple subjects and tracts.
@@ -2557,6 +2871,11 @@ class TractographyVisualizer:
             - "afq_profile": Skip AFQ profile visualization
             - "bundle_assignment": Skip bundle assignment visualization
             - "shape_similarity": Skip shape similarity calculation and visualization
+        n_jobs : int | None, optional
+            Number of parallel jobs to run for processing multiple subjects/tracts.
+            If None, uses the value set during initialization (default: 1).
+            Use -1 to use all available CPUs. Only effective when processing
+            multiple subjects/tracts. Default is None.
         **kwargs
             Additional keyword arguments passed to individual quality check methods.
 
@@ -2663,246 +2982,121 @@ class TractographyVisualizer:
         if skip_checks is None:
             skip_checks = []
 
+        # Determine number of jobs to use
+        if n_jobs is None:
+            n_jobs = self.n_jobs
+        elif n_jobs == -1:
+            import multiprocessing
+            n_jobs = multiprocessing.cpu_count()
+        else:
+            n_jobs = max(1, n_jobs)
+
         # Initialize results dictionary
         results: dict[str, dict[str, dict[str, str | Path]]] = {}
 
-        # Process each subject
+        # Prepare all tasks (subject_id, tract_name, tract_file combinations)
+        tasks: list[tuple[str, str, str | Path, Path, Path]] = []
         for subject_id, tracts in subjects_original_space.items():
-            # Get subject-specific reference image
             subject_ref_img = subject_ref_imgs[subject_id]
-            results[subject_id] = {}
-
-            # Create subject-specific output directory
             subject_output_dir = output_dir / subject_id
             subject_output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Process each tract for this subject
             for tract_name, tract_file in tracts.items():
                 tract_path = Path(tract_file)
                 if not tract_path.exists():
                     raise FileNotFoundError(f"Tract file not found: {tract_file}")
 
-                # Create tract-specific output directory
                 tract_output_dir = subject_output_dir / tract_name
                 tract_output_dir.mkdir(parents=True, exist_ok=True)
 
-                # Initialize results for this tract
-                results[subject_id][tract_name] = {}
+                tasks.append((subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir))
 
+        # Prepare visualizer parameters for worker processes
+        visualizer_params = {
+            "gif_size": self.gif_size,
+            "gif_duration": self.gif_duration,
+            "gif_palette_size": self.gif_palette_size,
+            "gif_frames": self.gif_frames,
+            "min_streamline_length": self.min_streamline_length,
+            "cci_threshold": self.cci_threshold,
+            "afq_resample_points": self.afq_resample_points,
+            "n_jobs": 1,  # Workers don't need parallelization
+        }
+
+        # Process tasks in parallel or sequentially
+        if n_jobs > 1 and len(tasks) > 1:
+            logger.info("Processing %d tracts using %d workers", len(tasks), n_jobs)
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                futures = {
+                    executor.submit(
+                        _process_tract_worker,
+                        subject_id=subject_id,
+                        tract_name=tract_name,
+                        tract_file=tract_file,
+                        subject_ref_img=subject_ref_img,
+                        tract_output_dir=tract_output_dir,
+                        subjects_mni_space=subjects_mni_space,
+                        atlas_files=atlas_files,
+                        metric_files=metric_files,
+                        atlas_ref_img=atlas_ref_img,
+                        flip_lr=flip_lr,
+                        skip_checks=skip_checks,
+                        visualizer_params=visualizer_params,
+                        **kwargs,
+                    ): (subject_id, tract_name)
+                    for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks
+                }
+
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    subject_id, tract_name = futures[future]
+                    try:
+                        result_subject_id, result_tract_name, tract_results = future.result()
+                        if result_subject_id not in results:
+                            results[result_subject_id] = {}
+                        results[result_subject_id][result_tract_name] = tract_results
+                        # Clean up the future reference
+                        del tract_results
+                    except Exception as e:
+                        subject_id, tract_name = futures[future]
+                        logger.exception("Error processing %s/%s: %s", subject_id, tract_name, e)
+                        if subject_id not in results:
+                            results[subject_id] = {}
+                        if tract_name not in results[subject_id]:
+                            results[subject_id][tract_name] = {}
+                    finally:
+                        # Clean up future reference
+                        del future
+                
+                # Force garbage collection after all parallel tasks complete
+                gc.collect()
+        else:
+            # Sequential processing
+            logger.info("Processing %d tracts sequentially", len(tasks))
+            for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks:
+                if subject_id not in results:
+                    results[subject_id] = {}
                 try:
-                    # 1. Standard anatomical views
-                    if "anatomical_views" not in skip_checks:
-                        try:
-                            anatomical_views = self.generate_anatomical_views(
-                                tract_file,
-                                output_dir=tract_output_dir,
-                                ref_img=subject_ref_img,
-                                **kwargs,
-                            )
-                            # Add anatomical views to results
-                            for view_name, view_path in anatomical_views.items():
-                                results[subject_id][tract_name][f"anatomical_{view_name}"] = view_path
-                        except (OSError, ValueError, RuntimeError) as e:
-                            logger.warning(
-                                "Failed to generate anatomical views for %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                e,
-                            )
+                    results[subject_id][tract_name] = self._process_single_tract(
+                        subject_id=subject_id,
+                        tract_name=tract_name,
+                        tract_file=tract_file,
+                        subject_ref_img=subject_ref_img,
+                        tract_output_dir=tract_output_dir,
+                        subjects_mni_space=subjects_mni_space,
+                        atlas_files=atlas_files,
+                        metric_files=metric_files,
+                        atlas_ref_img=atlas_ref_img,
+                        flip_lr=flip_lr,
+                        skip_checks=skip_checks,
+                        **kwargs,
+                    )
+                finally:
+                    # Clean up after each tract in sequential processing
+                    gc.collect()
 
-                    # 2. CCI calculation and visualization
-                    if "cci" not in skip_checks:
-                        try:
-                            # Plot CCI
-                            # TODO: Fix this - plot_cci expects (cci, keep_tract, hist_file), not tract_file
-                            cci_plots = self.plot_cci(
-                                tract_file,  # type: ignore[arg-type]
-                                output_dir=tract_output_dir,
-                                ref_img=subject_ref_img,
-                                **kwargs,
-                            )
-                            # Add CCI plots to results
-                            for plot_type, plot_path in cci_plots.items():
-                                results[subject_id][tract_name][f"cci_{plot_type}"] = plot_path
-                        except (OSError, ValueError, RuntimeError) as e:
-                            logger.warning(
-                                "Failed to generate CCI plots for %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                e,
-                            )
-
-                    # 3. Before/after CCI comparison
-                    if "before_after_cci" not in skip_checks:
-                        try:
-                            before_after_views = self.compare_before_after_cci(
-                                tract_file,
-                                output_dir=tract_output_dir,
-                                ref_img=subject_ref_img,
-                                **kwargs,
-                            )
-                            # Add before/after views to results
-                            for view_name, view_path in before_after_views.items():
-                                results[subject_id][tract_name][f"before_after_cci_{view_name}"] = view_path
-                        except (OSError, ValueError, RuntimeError) as e:
-                            logger.warning(
-                                "Failed to generate before/after CCI comparison for %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                e,
-                            )
-
-                    # 4. Atlas comparison (uses MNI space tracts for subject views)
-                    if "atlas_comparison" not in skip_checks and atlas_files is not None and tract_name in atlas_files:
-                        try:
-                            atlas_file = atlas_files[tract_name]
-                            # Generate subject views in MNI space if available, otherwise skip
-                            if (
-                                subjects_mni_space is not None
-                                and subject_id in subjects_mni_space
-                                and tract_name in subjects_mni_space[subject_id]
-                            ):
-                                tract_file_mni = subjects_mni_space[subject_id][tract_name]
-                                # Generate subject views in MNI space
-                                subject_mni_views = self.generate_anatomical_views(
-                                    tract_file_mni,
-                                    ref_img=atlas_ref_img,  # Use atlas ref image for MNI space
-                                    output_dir=tract_output_dir,
-                                    **kwargs,
-                                )
-                                # Add subject MNI views to results
-                                for view_name, view_path in subject_mni_views.items():
-                                    results[subject_id][tract_name][f"subject_mni_{view_name}"] = view_path
-
-                            # Generate atlas views
-                            atlas_views = self.generate_atlas_views(
-                                atlas_file,
-                                atlas_ref_img=atlas_ref_img,
-                                flip_lr=flip_lr,
-                                output_dir=tract_output_dir,
-                                **kwargs,
-                            )
-                            # Add atlas views to results
-                            for view_name, view_path in atlas_views.items():
-                                results[subject_id][tract_name][f"atlas_{view_name}"] = view_path
-                        except (OSError, ValueError, RuntimeError) as e:
-                            logger.warning(
-                                "Failed to generate atlas comparison views for %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                e,
-                            )
-
-                    # 5. Shape similarity (uses MNI space tracts)
-                    if (
-                        "shape_similarity" not in skip_checks
-                        and atlas_files is not None
-                        and subjects_mni_space is not None
-                    ) and (
-                        subject_id in subjects_mni_space
-                        and tract_name in subjects_mni_space[subject_id]
-                        and tract_name in atlas_files
-                    ):
-                        try:
-                            # Use MNI space tract for shape similarity
-                            tract_file_mni = subjects_mni_space[subject_id][tract_name]
-                            atlas_file = atlas_files[tract_name]
-                            # Calculate shape similarity score
-                            similarity_score = self.calculate_shape_similarity(
-                                tract_file_mni,
-                                atlas_file,
-                                atlas_ref_img=atlas_ref_img,
-                                flip_lr=flip_lr,
-                                **kwargs,
-                            )
-                            results[subject_id][tract_name]["shape_similarity_score"] = str(similarity_score)
-
-                            # Visualize shape similarity
-                            similarity_views = self.visualize_shape_similarity(
-                                tract_file_mni,
-                                atlas_file,
-                                atlas_ref_img=atlas_ref_img,
-                                flip_lr=flip_lr,
-                                output_dir=tract_output_dir,
-                                **kwargs,
-                            )
-                            # Add similarity views to results
-                            for view_name, view_path in similarity_views.items():
-                                results[subject_id][tract_name][f"similarity_{view_name}"] = view_path
-                        except (OSError, ValueError, RuntimeError, IndexError) as e:
-                            logger.warning(
-                                "Failed to calculate/visualize shape similarity for %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                e,
-                            )
-
-                    # 6. AFQ profile (requires metric files per subject and atlas files as model files)
-                    if ("afq_profile" not in skip_checks and metric_files is not None and atlas_files is not None) and (
-                        subject_id in metric_files and tract_name in atlas_files
-                    ):
-                        model_file = atlas_files[tract_name]  # Use atlas file as model file
-                        for metric_name, metric_file in metric_files[subject_id].items():
-                            try:
-                                afq_plots = self.plot_afq(
-                                    metric_file,
-                                    metric_name,
-                                    tract_file,
-                                    model_file,
-                                    ref_img=subject_ref_img,
-                                    output_dir=tract_output_dir,
-                                    **kwargs,
-                                )
-                                # Add AFQ plots to results
-                                for plot_type, plot_path in afq_plots.items():
-                                    results[subject_id][tract_name][f"afq_{metric_name}_{plot_type}"] = plot_path
-                            except (OSError, ValueError, RuntimeError, IndexError) as e:
-                                logger.warning(
-                                    "Failed to generate AFQ profile for %s/%s/%s: %s",
-                                    subject_id,
-                                    tract_name,
-                                    metric_name,
-                                    e,
-                                )
-
-                    # 7. Bundle assignment (uses MNI space tracts and atlas files as model files)
-                    if (
-                        "bundle_assignment" not in skip_checks
-                        and atlas_files is not None
-                        and subjects_mni_space is not None
-                    ) and (
-                        subject_id in subjects_mni_space
-                        and tract_name in subjects_mni_space[subject_id]
-                        and tract_name in atlas_files
-                    ):
-                        try:
-                            # Use MNI space tract for bundle assignment
-                            tract_file_mni = subjects_mni_space[subject_id][tract_name]
-                            model_file = atlas_files[tract_name]  # Use atlas file as model file
-                            assignment_views = self.visualize_bundle_assignment(
-                                tract_file_mni,
-                                model_file,
-                                output_dir=tract_output_dir,
-                                ref_img=subject_ref_img,
-                                **kwargs,
-                            )
-                            # Add assignment views to results
-                            for view_name, view_path in assignment_views.items():
-                                results[subject_id][tract_name][f"assignment_{view_name}"] = view_path
-                        except (OSError, ValueError, RuntimeError, IndexError) as e:
-                            logger.warning(
-                                "Failed to generate bundle assignment for %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                e,
-                            )
-
-                except (OSError, ValueError, RuntimeError):
-                    logger.exception("Error processing %s/%s", subject_id, tract_name)
-                    continue
-
-            # Generate HTML report
-            html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
+        # Generate HTML report
+        html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
 
         # Convert Path objects to strings for HTML function
         results_for_html: dict[str, dict[str, dict[str, str]]] = {}
@@ -2928,5 +3122,9 @@ class TractographyVisualizer:
             logger.info("Quality check report generated: %s", html_output)
         except (OSError, ValueError, RuntimeError) as e:
             logger.warning("Failed to generate HTML report: %s", e)
+        finally:
+            # Clean up HTML conversion dictionary after use
+            del results_for_html
+            gc.collect()
 
         return results
