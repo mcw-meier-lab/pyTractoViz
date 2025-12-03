@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.2.8](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.2.8) - 2025-12-03
+
+<small>[Compare with 0.2.7](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.2.7...0.2.8)</small>
+
+### Bug Fixes
+
+- multiprocessing ([6123ddb](https://github.com/mcw-meier-lab/pyTractoViz/commit/6123ddbb8597aceacb9b6a8acdcf2e6fd844517e) by Lezlie Espana).
+
 ## [0.2.7](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.2.7) - 2025-12-03
 
 <small>[Compare with 0.2.6](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.2.6...0.2.7)</small>
