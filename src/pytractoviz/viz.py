@@ -989,8 +989,23 @@ class TractographyVisualizer:
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
+        # Check if all output files already exist BEFORE loading tract
+        # This prevents unnecessary memory usage when files are already generated
+        all_files_exist = True
+        for view_name in views_to_generate:
+            output_image = output_dir / f"{tract_name}_{view_name}.png"
+            if output_image.exists():
+                generated_views[view_name] = output_image
+                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            else:
+                all_files_exist = False
+
+        # If all files exist, return early without loading tract
+        if all_files_exist:
+            return generated_views
+
         try:
-            # Load tract once
+            # Load tract only if we need to generate at least one view
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
             tract.to_rasmm()
             ref_img_obj = nib.load(str(ref_img))
@@ -1012,10 +1027,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"{tract_name}_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create scene using helper method
@@ -1375,7 +1388,22 @@ class TractographyVisualizer:
 
             generated_views["histogram"] = hist_path
 
-            # Transform tract streamlines to reference space
+            # Check if all view files already exist BEFORE processing tract
+            # This prevents unnecessary memory usage when files are already generated
+            all_view_files_exist = True
+            for view_name in views_to_generate:
+                output_image = output_dir / f"cci_{view_name}.png"
+                if output_image.exists():
+                    generated_views[view_name] = output_image
+                    logger.debug("Skipping generation of %s (file already exists)", output_image)
+                else:
+                    all_view_files_exist = False
+
+            # If all view files exist, return early without processing tract streamlines
+            if all_view_files_exist:
+                return generated_views
+
+            # Transform tract streamlines to reference space (only if needed)
             ref_img_obj = nib.load(str(ref_img))
             tract_streamlines = transform_streamlines(
                 keep_tract.streamlines,
@@ -1414,10 +1442,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"cci_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create scene
@@ -1586,8 +1612,29 @@ class TractographyVisualizer:
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
+        # Check profile plot path
+        profile_plot_path = output_dir / f"{tract_name}_{metric_str}_profile.png"
+        if profile_plot_path.exists():
+            logger.debug("Skipping generation of %s (file already exists)", profile_plot_path)
+        generated_views["profile_plot"] = profile_plot_path
+
+        # Check if all view files already exist BEFORE loading tract
+        # This prevents unnecessary memory usage when files are already generated
+        all_view_files_exist = True
+        for view_name in views_to_generate:
+            output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
+            if output_image.exists():
+                generated_views[view_name] = output_image
+                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            else:
+                all_view_files_exist = False
+
+        # If all view files exist and profile plot exists, return early without loading tract
+        if all_view_files_exist and profile_plot_path.exists():
+            return generated_views
+
         try:
-            # Load tract once
+            # Load tract only if we need to generate at least one view or profile plot
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
             tract.to_rasmm()
             ref_img_obj = nib.load(str(ref_img))
@@ -1618,10 +1665,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create scene using helper method
@@ -1656,8 +1701,7 @@ class TractographyVisualizer:
 
                 generated_views[view_name] = output_image
 
-            # Also create the profile line plot
-            profile_plot_path = output_dir / f"{tract_name}_{metric_str}_profile.png"
+            # Also create the profile line plot (if it doesn't already exist)
             if not profile_plot_path.exists():
                 fig, ax = plt.subplots(1, figsize=(8, 6))
                 ax.plot(profile)
@@ -1669,8 +1713,6 @@ class TractographyVisualizer:
                 plt.close(fig)
             else:
                 logger.debug("Skipping generation of %s (file already exists)", profile_plot_path)
-
-            generated_views["profile_plot"] = profile_plot_path
 
         except TractographyVisualizationError:
             raise
