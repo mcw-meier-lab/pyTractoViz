@@ -51,6 +51,83 @@ from pytractoviz.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _get_optimal_n_jobs() -> int:
+    """Calculate optimal number of jobs considering SLURM and OpenMP settings.
+
+    This function respects SLURM CPU allocations and OpenMP thread settings
+    to prevent oversubscription. It checks:
+    1. SLURM_CPUS_PER_TASK (if running under SLURM)
+    2. SLURM_JOB_CPUS_PER_NODE (if running under SLURM)
+    3. OMP_NUM_THREADS (to avoid conflicts with OpenMP)
+    4. Falls back to multiprocessing.cpu_count() if not in SLURM
+
+    Returns
+    -------
+    int
+        Optimal number of parallel jobs to use.
+    """
+    # Check if running under SLURM
+    slurm_cpus_per_task = os.environ.get("SLURM_CPUS_PER_TASK")
+    slurm_job_cpus = os.environ.get("SLURM_JOB_CPUS_PER_NODE")
+
+    if slurm_cpus_per_task:
+        # Use SLURM allocation
+        allocated_cpus = int(slurm_cpus_per_task)
+        logger.debug("Using SLURM_CPUS_PER_TASK=%d", allocated_cpus)
+
+        # Check OMP_NUM_THREADS to avoid oversubscription
+        omp_threads = int(os.environ.get("OMP_NUM_THREADS", "1"))
+        if omp_threads > 1:
+            # If OpenMP uses multiple threads, reduce n_jobs accordingly
+            # Formula: n_jobs = allocated_cpus / omp_threads
+            optimal_jobs = max(1, allocated_cpus // omp_threads)
+            logger.debug(
+                "OMP_NUM_THREADS=%d detected. Using n_jobs=%d (allocated_cpus=%d / omp_threads=%d)",
+                omp_threads,
+                optimal_jobs,
+                allocated_cpus,
+                omp_threads,
+            )
+            return optimal_jobs
+        return allocated_cpus
+    if slurm_job_cpus:
+        # Use SLURM job CPUs (may be a range like "8-16", take the first value)
+        allocated_cpus = int(slurm_job_cpus.split("-")[0].split(",")[0])
+        logger.debug("Using SLURM_JOB_CPUS_PER_NODE=%d", allocated_cpus)
+
+        # Check OMP_NUM_THREADS
+        omp_threads = int(os.environ.get("OMP_NUM_THREADS", "1"))
+        if omp_threads > 1:
+            optimal_jobs = max(1, allocated_cpus // omp_threads)
+            logger.debug(
+                "OMP_NUM_THREADS=%d detected. Using n_jobs=%d",
+                omp_threads,
+                optimal_jobs,
+            )
+            return optimal_jobs
+        return allocated_cpus
+
+    # Not in SLURM, check OMP_NUM_THREADS and fall back to cpu_count()
+    omp_threads = int(os.environ.get("OMP_NUM_THREADS", "0"))
+    if omp_threads > 0:
+        # If OMP_NUM_THREADS is set, use it to calculate n_jobs
+        total_cpus = multiprocessing.cpu_count()
+        optimal_jobs = max(1, total_cpus // omp_threads)
+        logger.debug(
+            "OMP_NUM_THREADS=%d detected. Using n_jobs=%d (cpu_count=%d / omp_threads=%d)",
+            omp_threads,
+            optimal_jobs,
+            total_cpus,
+            omp_threads,
+        )
+        return optimal_jobs
+
+    # Default: use all available CPUs
+    total_cpus = multiprocessing.cpu_count()
+    logger.debug("Using all available CPUs: n_jobs=%d", total_cpus)
+    return total_cpus
+
+
 def _process_tract_worker(
     subject_id: str,
     tract_name: str,
@@ -81,10 +158,17 @@ def _process_tract_worker(
         # Set environment variables before any VTK operations
         os.environ.setdefault("VTK_STREAM_READER", "1")
         os.environ.setdefault("VTK_STREAM_WRITER", "1")
+        # Force offscreen rendering to prevent segfaults
+        os.environ.setdefault("VTK_USE_OFFSCREEN", "1")
+        # Disable OpenGL to prevent segfaults in headless environments
+        os.environ.setdefault("VTK_USE_OSMESA", "0")
 
-        # Disable VTK warnings
-        with contextlib.suppress(AttributeError, RuntimeError):
+        # Disable VTK warnings and errors that might cause issues
+        with contextlib.suppress(AttributeError, RuntimeError, ImportError):
             vtk.vtkObject.GlobalWarningDisplayOff()
+            # Try to set error callback to prevent crashes
+            with contextlib.suppress(AttributeError, RuntimeError):
+                vtk.vtkOutputWindow.SetGlobalWarningDisplay(0)
 
         # Set matplotlib to non-interactive backend for headless environments
         with contextlib.suppress(ImportError, ValueError, RuntimeError):
@@ -92,48 +176,89 @@ def _process_tract_worker(
             plt.switch_backend("Agg")
 
         # Create a new visualizer instance in this worker process
-        visualizer = TractographyVisualizer(**visualizer_params)
+        # Wrap in try-except to catch initialization errors that might cause segfaults
+        try:
+            visualizer = TractographyVisualizer(**visualizer_params)
+        except (OSError, RuntimeError, MemoryError) as e:
+            logger.exception(
+                "Failed to initialize visualizer in worker for %s/%s: %s",
+                subject_id,
+                tract_name,
+                type(e).__name__,
+            )
+            return (subject_id, tract_name, {})
 
-        # Process the tract
-        results = visualizer._process_single_tract(
-            subject_id=subject_id,
-            tract_name=tract_name,
-            tract_file=tract_file,
-            subject_ref_img=Path(subject_ref_img),
-            tract_output_dir=Path(tract_output_dir),
-            subjects_mni_space=subjects_mni_space,
-            atlas_files=atlas_files,
-            metric_files=metric_files,
-            atlas_ref_img=atlas_ref_img,
-            flip_lr=flip_lr,
-            skip_checks=skip_checks,
-            **kwargs,
-        )
+        # Process the tract with additional error handling
+        try:
+            results = visualizer._process_single_tract(
+                subject_id=subject_id,
+                tract_name=tract_name,
+                tract_file=tract_file,
+                subject_ref_img=Path(subject_ref_img),
+                tract_output_dir=Path(tract_output_dir),
+                subjects_mni_space=subjects_mni_space,
+                atlas_files=atlas_files,
+                metric_files=metric_files,
+                atlas_ref_img=atlas_ref_img,
+                flip_lr=flip_lr,
+                skip_checks=skip_checks,
+                **kwargs,
+            )
+        except MemoryError:
+            # Memory errors are critical - log and return empty results
+            logger.exception(
+                "Memory error in worker process for %s/%s. Consider reducing n_jobs or increasing memory allocation.",
+                subject_id,
+                tract_name,
+            )
+            results = {}
+        except (OSError, ValueError, RuntimeError) as e:
+            # Catch specific exceptions that might cause process crashes
+            # Log the error but don't re-raise to prevent process pool from breaking
+            logger.exception(
+                "Error in worker process for %s/%s (%s)",
+                subject_id,
+                tract_name,
+                type(e).__name__,
+            )
+            # Return empty results dict on error
+            results = {}
+        except Exception as e:
+            # Catch any other unexpected exceptions
+            logger.exception(
+                "Unexpected error in worker process for %s/%s (%s)",
+                subject_id,
+                tract_name,
+                type(e).__name__,
+            )
+            # Return empty results dict on error
+            results = {}
     except (OSError, ValueError, RuntimeError, MemoryError) as e:
-        # Catch specific exceptions that might cause process crashes
-        # Log the error but don't re-raise to prevent process pool from breaking
+        # Catch errors during initialization or setup
         logger.exception(
-            "Error in worker process for %s/%s (%s)",
+            "Error during worker initialization for %s/%s (%s)",
             subject_id,
             tract_name,
             type(e).__name__,
         )
-        # Return empty results dict on error
         results = {}
     except Exception as e:
-        # Catch any other unexpected exceptions
+        # Catch any other unexpected exceptions during setup
         logger.exception(
-            "Unexpected error in worker process for %s/%s (%s)",
+            "Unexpected error during worker setup for %s/%s (%s)",
             subject_id,
             tract_name,
             type(e).__name__,
         )
-        # Return empty results dict on error
         results = {}
     finally:
         # Clean up the visualizer instance and force garbage collection
+        # This is critical to prevent memory leaks that could cause OOM kills
         if visualizer is not None:
-            del visualizer
+            # Try to clean up any VTK objects
+            with contextlib.suppress(AttributeError, RuntimeError, TypeError):
+                del visualizer
+        # Force garbage collection to free memory
         gc.collect()
 
     return (subject_id, tract_name, results)
@@ -178,8 +303,15 @@ class TractographyVisualizer:
         Number of points for AFQ resampling. Default is 100.
     n_jobs : int, optional
         Number of parallel jobs to run for processing multiple subjects/tracts.
-        Default is 1 (sequential processing). Use -1 to use all available CPUs.
+        Default is 1 (sequential processing). Use -1 to automatically determine
+        optimal number based on available resources (respects SLURM allocations
+        and OpenMP thread settings to prevent oversubscription).
         Only used in `run_quality_check_workflow()`.
+
+        Note: When running under SLURM, this will automatically use
+        SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
+        it will divide the available CPUs by the number of OpenMP threads to
+        prevent resource contention.
 
     Examples
     --------
@@ -235,7 +367,7 @@ class TractographyVisualizer:
         self.afq_resample_points = afq_resample_points
         # Handle n_jobs: -1 means use all CPUs, otherwise use specified value
         if n_jobs == -1:
-            self.n_jobs = multiprocessing.cpu_count()
+            self.n_jobs = _get_optimal_n_jobs()
         else:
             self.n_jobs = max(1, n_jobs) if n_jobs is not None else 1
 
@@ -2924,8 +3056,15 @@ class TractographyVisualizer:
         n_jobs : int | None, optional
             Number of parallel jobs to run for processing multiple subjects/tracts.
             If None, uses the value set during initialization (default: 1).
-            Use -1 to use all available CPUs. Only effective when processing
-            multiple subjects/tracts. Default is None.
+            Use -1 to automatically determine optimal number based on available
+            resources (respects SLURM allocations and OpenMP thread settings to
+            prevent oversubscription). Only effective when processing multiple
+            subjects/tracts. Default is None.
+
+            Note: When running under SLURM, -1 will automatically use
+            SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
+            it will divide the available CPUs by the number of OpenMP threads to
+            prevent resource contention.
         **kwargs
             Additional keyword arguments passed to individual quality check methods.
 
@@ -3037,9 +3176,13 @@ class TractographyVisualizer:
         if n_jobs is None:
             n_jobs = self.n_jobs
         elif n_jobs == -1:
-            n_jobs = multiprocessing.cpu_count()
+            # Use optimal n_jobs considering SLURM and OpenMP settings
+            n_jobs = _get_optimal_n_jobs()
         else:
             n_jobs = max(1, n_jobs)
+
+        # Log the final n_jobs value for debugging
+        logger.debug("Using n_jobs=%d for parallel processing", n_jobs)
 
         # Initialize results dictionary
         results: dict[str, dict[str, dict[str, str | Path]]] = {}
@@ -3232,7 +3375,12 @@ class TractographyVisualizer:
                 # and other runtime errors that might occur with process pools
                 error_msg = str(e)
                 if "BrokenProcessPool" in error_msg or "falling back" in error_msg.lower():
-                    logger.warning("Process pool error occurred. Falling back to sequential processing")
+                    logger.warning(
+                        "Process pool error occurred (worker process may have crashed with core dump). "
+                        "Falling back to sequential processing. "
+                        "If this persists, try: (1) reducing n_jobs, (2) increasing memory allocation, "
+                        "or (3) using n_jobs=1 to force sequential processing.",
+                    )
                 else:
                     logger.exception("RuntimeError in process pool. Falling back to sequential processing")
 
