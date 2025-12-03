@@ -30,6 +30,7 @@ dependencies = [
     "dipy>=1.11.0",
     "fury>=0.12.0",
     "imageio>=2.37.2",
+    "xvfbwrapper>=0.2.15",
 ]
 
 [project.urls]

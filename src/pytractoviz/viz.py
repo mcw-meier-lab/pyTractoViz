@@ -35,6 +35,7 @@ from fury import actor, window
 from fury.colormap import create_colormap
 from PIL import Image
 from scipy.spatial.transform import Rotation
+from xvfbwrapper import Xvfb
 
 from pytractoviz.html import create_quality_check_html
 from pytractoviz.utils import (
@@ -2976,6 +2977,13 @@ class TractographyVisualizer:
         ...     html_output="quality_report.html",
         ... )
         """
+        # Initialize XVFB (X Virtual Framebuffer) if requested for headless environments
+        vdisplay = None
+        if os.environ.get("XVFB", "").lower() in ("1", "true", "yes"):
+            logger.info("Initializing XVFB for headless rendering")
+            vdisplay = Xvfb()
+            vdisplay.start()
+
         # Get output directory
         if output_dir is None:
             if self._output_directory is None:
@@ -3118,7 +3126,12 @@ class TractographyVisualizer:
                                 results[subject_id][tract_name] = {}
                         except Exception as e:
                             # Catch any other unexpected exceptions
-                            logger.exception("Unexpected error processing %s/%s: %s", subject_id, tract_name, type(e).__name__)
+                            logger.exception(
+                                "Unexpected error processing %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                type(e).__name__,
+                            )
                             if subject_id not in results:
                                 results[subject_id] = {}
                             if tract_name not in results[subject_id]:
@@ -3135,35 +3148,67 @@ class TractographyVisualizer:
 
                     # Force garbage collection after all parallel tasks complete
                     gc.collect()
-            except RuntimeError:
+            except RuntimeError as e:
                 # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
                 # and other runtime errors that might occur with process pools
-                logger.exception("Process pool error occurred. Falling back to sequential processing")
+                error_msg = str(e)
+                if "BrokenProcessPool" in error_msg or "falling back" in error_msg.lower():
+                    logger.warning("Process pool error occurred. Falling back to sequential processing")
+                else:
+                    logger.exception("RuntimeError in process pool. Falling back to sequential processing")
+
                 # Fall back to sequential processing if process pool fails
-                logger.info("Processing %d tracts sequentially (fallback)", len(tasks))
-                for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks:
-                    if subject_id not in results:
-                        results[subject_id] = {}
-                    try:
-                        results[subject_id][tract_name] = self._process_single_tract(
-                            subject_id=subject_id,
-                            tract_name=tract_name,
-                            tract_file=tract_file,
-                            subject_ref_img=subject_ref_img,
-                            tract_output_dir=tract_output_dir,
-                            subjects_mni_space=subjects_mni_space,
-                            atlas_files=atlas_files,
-                            metric_files=metric_files,
-                            atlas_ref_img=atlas_ref_img,
-                            flip_lr=flip_lr,
-                            skip_checks=skip_checks,
-                            **kwargs,
-                        )
-                    except Exception:
-                        logger.exception("Error processing %s/%s in fallback mode", subject_id, tract_name)
-                        results[subject_id][tract_name] = {}
-                    finally:
-                        gc.collect()
+                # Only process tasks that haven't been completed yet
+                remaining_tasks = [
+                    (s_id, t_name, t_file, s_ref, t_out)
+                    for s_id, t_name, t_file, s_ref, t_out in tasks
+                    if s_id not in results or t_name not in results.get(s_id, {})
+                ]
+
+                if remaining_tasks:
+                    logger.info("Processing %d remaining tracts sequentially (fallback)", len(remaining_tasks))
+                    for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in remaining_tasks:
+                        if subject_id not in results:
+                            results[subject_id] = {}
+                        # Skip if already processed
+                        if tract_name in results[subject_id]:
+                            continue
+                        try:
+                            results[subject_id][tract_name] = self._process_single_tract(
+                                subject_id=subject_id,
+                                tract_name=tract_name,
+                                tract_file=tract_file,
+                                subject_ref_img=subject_ref_img,
+                                tract_output_dir=tract_output_dir,
+                                subjects_mni_space=subjects_mni_space,
+                                atlas_files=atlas_files,
+                                metric_files=metric_files,
+                                atlas_ref_img=atlas_ref_img,
+                                flip_lr=flip_lr,
+                                skip_checks=skip_checks,
+                                **kwargs,
+                            )
+                        except (OSError, ValueError, RuntimeError, MemoryError) as process_error:
+                            logger.exception(
+                                "Error processing %s/%s in fallback mode (%s)",
+                                subject_id,
+                                tract_name,
+                                type(process_error).__name__,
+                            )
+                            results[subject_id][tract_name] = {}
+                        except Exception as process_error:
+                            logger.exception(
+                                "Unexpected error processing %s/%s in fallback mode (%s)",
+                                subject_id,
+                                tract_name,
+                                type(process_error).__name__,
+                            )
+                            results[subject_id][tract_name] = {}
+                        finally:
+                            # Force garbage collection after each tract in fallback mode
+                            gc.collect()
+                else:
+                    logger.info("All tasks already completed, skipping fallback processing")
         else:
             # Sequential processing
             logger.info("Processing %d tracts sequentially", len(tasks))
@@ -3220,5 +3265,8 @@ class TractographyVisualizer:
             # Clean up HTML conversion dictionary after use
             del results_for_html
             gc.collect()
-
+        # Stop XVFB if it was started
+        if vdisplay is not None:
+            logger.info("Stopping XVFB")
+            vdisplay.stop()
         return results
