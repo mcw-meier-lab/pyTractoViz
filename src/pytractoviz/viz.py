@@ -7,6 +7,8 @@ import gc
 import logging
 import multiprocessing
 import os
+import resource
+import sys
 import tempfile
 import tracemalloc
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -99,7 +101,26 @@ def _log_memory_usage(
     """
     memory_info: dict[str, float | int] = {}
 
-    # Process-level memory using psutil (if available)
+    # Method 1: resource module (built-in, Unix/macOS/Linux, no dependencies)
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        # ru_maxrss is in KB on macOS, MB on Linux
+        if sys.platform == "darwin":  # macOS
+            resource_rss_mb = usage.ru_maxrss / 1024
+        else:  # Linux
+            resource_rss_mb = usage.ru_maxrss
+        memory_info["resource_rss_mb"] = round(resource_rss_mb, 2)
+        logger.log(
+            log_level,
+            "Memory usage%s (resource): RSS=%.2f MB",
+            f" [{label}]" if label else "",
+            resource_rss_mb,
+        )
+    except (OSError, AttributeError):
+        # resource module not available on this platform
+        pass
+
+    # Method 2: Process-level memory using psutil (if available, more detailed)
     if psutil is not None:
         process = psutil.Process(os.getpid())
         mem_info = process.memory_info()
@@ -165,6 +186,171 @@ def _log_memory_usage(
         memory_info["tracemalloc_peak_mb"] = round(peak / (1024**2), 2)
 
     return memory_info if memory_info else None
+
+
+def _set_memory_limit(memory_limit_mb: float | None = None) -> None:
+    """Set a hard memory limit for the current process.
+
+    This uses resource.setrlimit() to set a maximum virtual memory (address space)
+    limit. If the process exceeds this limit, it will be killed by the OS.
+
+    Parameters
+    ----------
+    memory_limit_mb : float | None, optional
+        Maximum memory limit in MB. If None, no limit is set.
+        If set, the process will be killed if it exceeds this limit.
+
+    Examples
+    --------
+    >>> # Limit to 8 GB
+    >>> _set_memory_limit(8192)
+
+    >>> # Limit to 4 GB
+    >>> _set_memory_limit(4096)
+
+    Notes
+    -----
+    - This sets RLIMIT_AS (virtual memory/address space limit)
+    - On macOS, this is enforced by the kernel
+    - The limit applies to the entire process, including all threads
+    - Once set, the limit cannot be increased (only decreased)
+    """
+    if memory_limit_mb is None:
+        return
+
+    try:
+        # Convert MB to bytes
+        memory_limit_bytes = int(memory_limit_mb * 1024 * 1024)
+
+        # Set virtual memory limit (RLIMIT_AS)
+        # This limits the total address space the process can use
+        resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, resource.RLIM_INFINITY))
+
+        logger.info("Memory limit set to %.2f MB (%.2f GB)", memory_limit_mb, memory_limit_mb / 1024)
+    except (OSError, ValueError) as e:
+        logger.warning("Failed to set memory limit: %s", e)
+
+
+def _check_memory_available(required_mb: float, safety_margin: float = 0.2) -> bool:
+    """Check if enough memory is available before loading data.
+
+    Parameters
+    ----------
+    required_mb : float
+        Estimated memory required in MB.
+    safety_margin : float, default=0.2
+        Safety margin as fraction (0.2 = 20% extra buffer).
+
+    Returns
+    -------
+    bool
+        True if enough memory is available, False otherwise.
+    """
+    if psutil is None:
+        # If psutil not available, assume we have enough
+        logger.debug("psutil not available, skipping memory check")
+        return True
+
+    try:
+        # Get system memory
+        sys_mem = psutil.virtual_memory()
+        available_mb = sys_mem.available / (1024**2)
+
+        # Get current process memory
+        process = psutil.Process(os.getpid())
+        current_mb = process.memory_info().rss / (1024**2)
+
+        # Calculate required with safety margin
+        required_with_margin = required_mb * (1 + safety_margin)
+
+        # Check if we have enough available memory
+        if available_mb < required_with_margin:
+            logger.warning(
+                "Insufficient memory: Need %.2f MB (with %.0f%% margin), "
+                "but only %.2f MB available. Current process: %.2f MB",
+                required_with_margin,
+                safety_margin * 100,
+                available_mb,
+                current_mb,
+            )
+            return False
+
+        logger.debug(
+            "Memory check: Need %.2f MB, Available: %.2f MB, Current: %.2f MB",
+            required_with_margin,
+            available_mb,
+            current_mb,
+        )
+    except (OSError, RuntimeError, AttributeError) as e:
+        logger.warning("Memory check failed: %s. Proceeding anyway.", e)
+        return True
+    else:
+        return True
+
+
+def _get_n_jobs_with_memory_limit(
+    base_n_jobs: int,
+    estimated_memory_per_job_mb: float = 2000.0,
+    safety_margin: float = 0.2,
+) -> int:
+    """Calculate n_jobs considering available memory.
+
+    Reduces n_jobs if there isn't enough memory to run all jobs in parallel.
+
+    Parameters
+    ----------
+    base_n_jobs : int
+        Base number of jobs to use (from CPU/SLURM settings).
+    estimated_memory_per_job_mb : float, default=2000.0
+        Estimated memory per job in MB. Default assumes ~2GB per worker.
+    safety_margin : float, default=0.2
+        Safety margin as fraction (0.2 = 20% extra buffer).
+
+    Returns
+    -------
+    int
+        Adjusted number of jobs considering memory constraints.
+    """
+    if psutil is None:
+        # If psutil not available, return base_n_jobs
+        return base_n_jobs
+
+    try:
+        # Get available system memory
+        sys_mem = psutil.virtual_memory()
+        available_mb = sys_mem.available / (1024**2)
+
+        # Get current process memory
+        process = psutil.Process(os.getpid())
+        current_mb = process.memory_info().rss / (1024**2)
+
+        # Calculate how much memory we can use for workers
+        # Reserve some for the main process
+        usable_mb = available_mb - (current_mb * 0.5)  # Reserve 50% of current for main process
+
+        # Calculate required memory with safety margin
+        required_per_job = estimated_memory_per_job_mb * (1 + safety_margin)
+
+        # Calculate max jobs based on memory
+        max_jobs_by_memory = max(1, int(usable_mb / required_per_job))
+
+        # Use the minimum of base_n_jobs and memory-limited jobs
+        optimal_jobs = min(base_n_jobs, max_jobs_by_memory)
+
+        if optimal_jobs < base_n_jobs:
+            logger.info(
+                "Reduced n_jobs from %d to %d due to memory constraints "
+                "(Available: %.2f MB, Estimated per job: %.2f MB)",
+                base_n_jobs,
+                optimal_jobs,
+                usable_mb,
+                required_per_job,
+            )
+    except (OSError, RuntimeError, AttributeError) as e:
+        logger.warning("Memory-based n_jobs calculation failed: %s. Using base_n_jobs=%d", e, base_n_jobs)
+        return base_n_jobs
+    else:
+        return optimal_jobs
 
 
 def _get_optimal_n_jobs() -> int:
@@ -435,6 +621,13 @@ class TractographyVisualizer:
         SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
         it will divide the available CPUs by the number of OpenMP threads to
         prevent resource contention.
+    max_memory_mb : float | None, optional
+        Maximum memory limit in MB for the process. If set, the process will be
+        killed by the OS if it exceeds this limit. This helps prevent OOM kills
+        by setting a hard limit. Default is None (no limit).
+
+        Note: This uses resource.setrlimit() which sets a virtual memory limit.
+        Once set, the limit cannot be increased (only decreased).
 
     Examples
     --------
@@ -471,10 +664,12 @@ class TractographyVisualizer:
         cci_threshold: float = 1.0,
         afq_resample_points: int = 100,
         n_jobs: int = 1,
+        max_memory_mb: float | None = None,
     ) -> None:
         """Initialize the TractographyVisualizer."""
         self._reference_image: Path | None = None
         self._output_directory: Path | None = None
+        self.max_memory_mb: float | None = None
 
         if reference_image is not None:
             self.set_reference_image(reference_image)
@@ -492,7 +687,14 @@ class TractographyVisualizer:
         if n_jobs == -1:
             self.n_jobs = _get_optimal_n_jobs()
         else:
-            self.n_jobs = max(1, n_jobs) if n_jobs is not None else 1
+            self.n_jobs = n_jobs
+
+        # Set memory limit if specified
+        if max_memory_mb is not None:
+            _set_memory_limit(max_memory_mb)
+            self.max_memory_mb = max_memory_mb
+        else:
+            self.max_memory_mb = None
 
     def set_reference_image(self, reference_image: str | Path) -> None:
         """Set the reference T1-weighted image.
@@ -3353,9 +3555,22 @@ class TractographyVisualizer:
             n_jobs = self.n_jobs
         elif n_jobs == -1:
             # Use optimal n_jobs considering SLURM and OpenMP settings
-            n_jobs = _get_optimal_n_jobs()
+            base_n_jobs = _get_optimal_n_jobs()
+            # Further reduce if memory is limited
+            n_jobs = _get_n_jobs_with_memory_limit(
+                base_n_jobs,
+                estimated_memory_per_job_mb=2000.0,  # ~2GB per worker
+                safety_margin=0.2,
+            )
         else:
             n_jobs = max(1, n_jobs)
+            # Still check memory even if n_jobs is explicitly set
+            if psutil is not None:
+                n_jobs = _get_n_jobs_with_memory_limit(
+                    n_jobs,
+                    estimated_memory_per_job_mb=2000.0,
+                    safety_margin=0.2,
+                )
 
         # Log the final n_jobs value for debugging
         logger.debug("Using n_jobs=%d for parallel processing", n_jobs)
