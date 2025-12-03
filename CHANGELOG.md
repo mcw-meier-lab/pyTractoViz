@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.2.10](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.2.10) - 2025-12-03
+
+<small>[Compare with 0.2.9](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.2.9...0.2.10)</small>
+
+### Bug Fixes
+
+- avoid loading tracts if images exist ([caced32](https://github.com/mcw-meier-lab/pyTractoViz/commit/caced32fac302f9b6abb276d159d9d1cb46fc9f7) by Lezlie Espana).
+
 ## [0.2.9](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.2.9) - 2025-12-03
 
 <small>[Compare with 0.2.8](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.2.8...0.2.9)</small>
