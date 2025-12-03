@@ -8,9 +8,15 @@ import logging
 import multiprocessing
 import os
 import tempfile
+import tracemalloc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 import imageio
 import matplotlib.pyplot as plt
@@ -49,6 +55,116 @@ from pytractoviz.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_memory_usage(
+    label: str = "",
+    *,
+    enable_tracemalloc: bool = False,
+    log_level: int = logging.DEBUG,
+) -> dict[str, float | int] | None:
+    """Log current memory usage for debugging memory issues.
+
+    This function provides comprehensive memory monitoring using:
+    - psutil (if available): Process-level memory (RSS, VMS)
+    - tracemalloc (built-in): Python-level memory tracking
+
+    Parameters
+    ----------
+    label : str, optional
+        Label to identify this memory checkpoint (e.g., "after loading tract").
+    enable_tracemalloc : bool, default=False
+        If True, also log top memory allocations from tracemalloc.
+        Note: tracemalloc must be started with tracemalloc.start() first.
+    log_level : int, default=logging.DEBUG
+        Logging level to use for memory information.
+
+    Returns
+    -------
+    dict[str, float | int] | None
+        Dictionary with memory statistics, or None if psutil is not available.
+        Keys: 'rss_mb', 'vms_mb', 'percent', 'available_mb' (if psutil available).
+
+    Examples
+    --------
+    >>> # Basic usage
+    >>> _log_memory_usage("Before processing")
+    >>> # Process data...
+    >>> _log_memory_usage("After processing")
+
+    >>> # With tracemalloc for detailed tracking
+    >>> import tracemalloc
+    >>> tracemalloc.start()
+    >>> _log_memory_usage("Checkpoint 1", enable_tracemalloc=True)
+    """
+    memory_info: dict[str, float | int] = {}
+
+    # Process-level memory using psutil (if available)
+    if psutil is not None:
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        mem_percent = process.memory_percent()
+
+        # Get system memory info
+        try:
+            sys_mem = psutil.virtual_memory()
+            available_mb = sys_mem.available / (1024**2)
+        except (OSError, RuntimeError, AttributeError):
+            available_mb = 0.0
+
+        rss_mb = mem_info.rss / (1024**2)  # Resident Set Size
+        vms_mb = mem_info.vms / (1024**2)  # Virtual Memory Size
+
+        memory_info = {
+            "rss_mb": round(rss_mb, 2),
+            "vms_mb": round(vms_mb, 2),
+            "percent": round(mem_percent, 2),
+            "available_mb": round(available_mb, 2),
+        }
+
+        logger.log(
+            log_level,
+            "Memory usage%s: RSS=%.2f MB, VMS=%.2f MB, Process=%.2f%%, System Available=%.2f MB",
+            f" [{label}]" if label else "",
+            rss_mb,
+            vms_mb,
+            mem_percent,
+            available_mb,
+        )
+    else:
+        logger.log(
+            log_level,
+            "Memory monitoring: psutil not available. Install with: pip install psutil",
+        )
+
+    # Python-level memory using tracemalloc (if enabled)
+    if enable_tracemalloc and tracemalloc.is_tracing():
+        snapshot = tracemalloc.take_snapshot()
+        top_stats = snapshot.statistics("lineno")
+
+        logger.log(log_level, "Top 5 memory allocations%s:", f" [{label}]" if label else "")
+        for index, stat in enumerate(top_stats[:5], 1):
+            logger.log(
+                log_level,
+                "  #%d: %s: %.1f MB",
+                index,
+                stat.traceback[0],
+                stat.size / (1024**2),
+            )
+
+        # Get current and peak memory
+        current, peak = tracemalloc.get_traced_memory()
+        logger.log(
+            log_level,
+            "Tracemalloc: Current=%.2f MB, Peak=%.2f MB",
+            current / (1024**2),
+            peak / (1024**2),
+        )
+
+        memory_info["tracemalloc_current_mb"] = round(current / (1024**2), 2)
+        memory_info["tracemalloc_peak_mb"] = round(peak / (1024**2), 2)
+
+    return memory_info if memory_info else None
 
 
 def _get_optimal_n_jobs() -> int:
@@ -258,8 +374,15 @@ def _process_tract_worker(
             # Try to clean up any VTK objects
             with contextlib.suppress(AttributeError, RuntimeError, TypeError):
                 del visualizer
-        # Force garbage collection to free memory
-        gc.collect()
+        # Clear results dict reference if it's large
+        if results:
+            # Keep only the minimal results (file paths, not data)
+            pass  # Results dict should only contain paths, not large data
+
+        # Force garbage collection multiple times to handle circular references
+        # VTK objects can have complex reference cycles
+        for _ in range(3):
+            gc.collect()
 
     return (subject_id, tract_name, results)
 
@@ -1336,10 +1459,12 @@ class TractographyVisualizer:
                 )
 
                 # Explicitly clean up scene and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene.clear()
                 del tract_actor
                 if brain_actor is not None:
                     del brain_actor
+                del scene
 
                 # Force garbage collection between views to free memory
                 # This is critical for large tractograms to prevent OOM kills
@@ -2529,8 +2654,13 @@ class TractographyVisualizer:
                 gif_frames.append(frame)
 
                 # Force memory cleanup
-                del stream_actor
+                del stream_actor, rotated_streamlines
                 gc.collect()
+
+            # Clean up scene and actors after all frames are captured
+            scene.clear()
+            del tract_actor, brain_actor, scene
+            del tract, tract_streamlines, ref_img_obj
 
             # Save as optimized GIF
             imageio.mimsave(
@@ -2539,6 +2669,10 @@ class TractographyVisualizer:
                 duration=self.gif_duration,
                 palettesize=self.gif_palette_size,
             )
+
+            # Clean up frames after saving
+            del gif_frames
+            gc.collect()
         except TractographyVisualizationError:
             raise
         except (OSError, ValueError, RuntimeError) as e:
@@ -3243,6 +3377,7 @@ class TractographyVisualizer:
 
                     # Collect results as they complete
                     broken_pool_detected = False
+                    completed_count = 0
                     try:
                         for future in as_completed(futures):
                             subject_id, tract_name = futures[future]
@@ -3325,8 +3460,18 @@ class TractographyVisualizer:
                                 if tract_name not in results[subject_id]:
                                     results[subject_id][tract_name] = {}
                             finally:
-                                # Clean up future reference
+                                # Increment counter regardless of success/failure
+                                completed_count += 1
+
+                                # Clean up future reference and remove from futures dict
+                                # This is critical to prevent memory accumulation
+                                futures.pop(future, None)
                                 del future
+
+                                # Periodic garbage collection every 10 completed tasks
+                                # This helps prevent memory buildup during long-running jobs
+                                if completed_count > 0 and completed_count % 10 == 0:
+                                    gc.collect()
                     except RuntimeError as e:
                         # Catch BrokenProcessPool that might break out of the loop
                         error_type = type(e).__name__
@@ -3368,8 +3513,13 @@ class TractographyVisualizer:
                         # The exception will be caught by the outer try-except block
                         raise RuntimeError("BrokenProcessPool detected, falling back to sequential processing")  # noqa: TRY301
 
+                    # Clear futures dictionary to free memory
+                    futures.clear()
+
                     # Force garbage collection after all parallel tasks complete
-                    gc.collect()
+                    # Run multiple times to handle circular references
+                    for _ in range(3):
+                        gc.collect()
             except RuntimeError as e:
                 # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
                 # and other runtime errors that might occur with process pools
@@ -3401,7 +3551,7 @@ class TractographyVisualizer:
                         if tract_name in results[subject_id]:
                             continue
                         try:
-                            results[subject_id][tract_name] = self._process_single_tract(
+                            tract_result = self._process_single_tract(
                                 subject_id=subject_id,
                                 tract_name=tract_name,
                                 tract_file=tract_file,
@@ -3415,6 +3565,9 @@ class TractographyVisualizer:
                                 skip_checks=skip_checks,
                                 **kwargs,
                             )
+                            results[subject_id][tract_name] = tract_result
+                            # Clean up result reference
+                            del tract_result
                         except (OSError, ValueError, RuntimeError, MemoryError) as process_error:
                             logger.exception(
                                 "Error processing %s/%s in fallback mode (%s)",
@@ -3433,7 +3586,9 @@ class TractographyVisualizer:
                             results[subject_id][tract_name] = {}
                         finally:
                             # Force garbage collection after each tract in fallback mode
-                            gc.collect()
+                            # Run multiple times to handle circular references in VTK objects
+                            for _ in range(2):
+                                gc.collect()
                 else:
                     logger.info("All tasks already completed, skipping fallback processing")
         else:
@@ -3443,7 +3598,7 @@ class TractographyVisualizer:
                 if subject_id not in results:
                     results[subject_id] = {}
                 try:
-                    results[subject_id][tract_name] = self._process_single_tract(
+                    tract_result = self._process_single_tract(
                         subject_id=subject_id,
                         tract_name=tract_name,
                         tract_file=tract_file,
@@ -3457,9 +3612,14 @@ class TractographyVisualizer:
                         skip_checks=skip_checks,
                         **kwargs,
                     )
+                    results[subject_id][tract_name] = tract_result
+                    # Clean up result reference
+                    del tract_result
                 finally:
                     # Clean up after each tract in sequential processing
-                    gc.collect()
+                    # Run multiple times to handle circular references in VTK objects
+                    for _ in range(2):
+                        gc.collect()
 
             # Generate HTML report
             html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
