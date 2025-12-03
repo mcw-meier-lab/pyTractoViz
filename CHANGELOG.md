@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.2.6](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.2.6) - 2025-12-03
+
+<small>[Compare with 0.2.5](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.2.5...0.2.6)</small>
+
+### Bug Fixes
+
+- add support for headless envs ([f7f8341](https://github.com/mcw-meier-lab/pyTractoViz/commit/f7f8341002009adc4157b4dcb2134850711802e2) by Lezlie Espana).
+
 ## [0.2.5](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.2.5) - 2025-12-02
 
 <small>[Compare with 0.2.4](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.2.4...0.2.5)</small>
