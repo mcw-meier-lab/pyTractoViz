@@ -77,9 +77,19 @@ def _process_tract_worker(
 
     try:
         # Initialize VTK offscreen rendering in worker process
-        # This is important for headless environments and multiprocessing
+        # This is critical for headless cluster environments
+        # Set environment variables before any VTK operations
+        os.environ.setdefault("VTK_STREAM_READER", "1")
+        os.environ.setdefault("VTK_STREAM_WRITER", "1")
+
+        # Disable VTK warnings
         with contextlib.suppress(AttributeError, RuntimeError):
-            vtk.vtkObject.GlobalWarningDisplayOff()  # Suppress VTK warnings
+            vtk.vtkObject.GlobalWarningDisplayOff()
+
+        # Set matplotlib to non-interactive backend for headless environments
+        with contextlib.suppress(ImportError, ValueError, RuntimeError):
+            # Use Agg backend (no display needed) for headless environments
+            plt.switch_backend("Agg")
 
         # Create a new visualizer instance in this worker process
         visualizer = TractographyVisualizer(**visualizer_params)
@@ -3090,55 +3100,124 @@ class TractographyVisualizer:
 
                     # Collect results as they complete
                     broken_pool_detected = False
-                    for future in as_completed(futures):
-                        subject_id, tract_name = futures[future]
-                        try:
-                            result_subject_id, result_tract_name, tract_results = future.result(timeout=None)
-                            if result_subject_id not in results:
-                                results[result_subject_id] = {}
-                            results[result_subject_id][result_tract_name] = tract_results
-                            # Clean up the future reference
-                            del tract_results
-                        except RuntimeError as e:
-                            # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
-                            # Check if this is a BrokenProcessPool by checking the error message
-                            error_msg = str(e)
-                            if "BrokenProcessPool" in error_msg or "process pool" in error_msg.lower():
-                                broken_pool_detected = True
+                    try:
+                        for future in as_completed(futures):
+                            subject_id, tract_name = futures[future]
+                            try:
+                                # Get result with timeout - this is where BrokenProcessPool is raised
+                                result_subject_id, result_tract_name, tract_results = future.result(timeout=None)
+                                if result_subject_id not in results:
+                                    results[result_subject_id] = {}
+                                results[result_subject_id][result_tract_name] = tract_results
+                                # Clean up the future reference
+                                del tract_results
+                            except RuntimeError as e:
+                                # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
+                                # Check if this is a BrokenProcessPool by checking the error message and type name
+                                error_type = type(e).__name__
+                                error_msg = str(e)
+                                if (
+                                    "BrokenProcessPool" in error_type
+                                    or "BrokenProcessPool" in error_msg
+                                    or "process pool" in error_msg.lower()
+                                    or "was terminated abruptly" in error_msg
+                                ):
+                                    broken_pool_detected = True
+                                    logger.exception(
+                                        "BrokenProcessPool detected for %s/%s. Worker process may have crashed",
+                                        subject_id,
+                                        tract_name,
+                                    )
+                                    # Mark this task as failed
+                                    if subject_id not in results:
+                                        results[subject_id] = {}
+                                    if tract_name not in results[subject_id]:
+                                        results[subject_id][tract_name] = {}
+                                    # Break out of the loop immediately - pool is broken, can't process more
+                                    break
+                                logger.exception("RuntimeError processing %s/%s", subject_id, tract_name)
+                                if subject_id not in results:
+                                    results[subject_id] = {}
+                                if tract_name not in results[subject_id]:
+                                    results[subject_id][tract_name] = {}
+                            except (OSError, ValueError) as e:
+                                # OSError catches system-level errors
+                                # ValueError catches other processing errors
+                                logger.exception("Error processing %s/%s: %s", subject_id, tract_name, type(e).__name__)
+                                if subject_id not in results:
+                                    results[subject_id] = {}
+                                if tract_name not in results[subject_id]:
+                                    results[subject_id][tract_name] = {}
+                            except Exception as e:
+                                # Catch any other unexpected exceptions, including BrokenProcessPool
+                                error_type = type(e).__name__
+                                error_msg = str(e)
+                                if (
+                                    "BrokenProcessPool" in error_type
+                                    or "BrokenProcessPool" in error_msg
+                                    or "process pool" in error_msg.lower()
+                                    or "was terminated abruptly" in error_msg
+                                ):
+                                    broken_pool_detected = True
+                                    logger.exception(
+                                        "BrokenProcessPool detected for %s/%s (caught as Exception). Worker process may have crashed",
+                                        subject_id,
+                                        tract_name,
+                                    )
+                                    # Mark this task as failed
+                                    if subject_id not in results:
+                                        results[subject_id] = {}
+                                    if tract_name not in results[subject_id]:
+                                        results[subject_id][tract_name] = {}
+                                    # Break out of the loop immediately - pool is broken, can't process more
+                                    break
                                 logger.exception(
-                                    "BrokenProcessPool detected for %s/%s. Worker process may have crashed",
+                                    "Unexpected error processing %s/%s: %s",
                                     subject_id,
                                     tract_name,
+                                    type(e).__name__,
                                 )
-                            else:
-                                logger.exception("RuntimeError processing %s/%s", subject_id, tract_name)
-                            if subject_id not in results:
-                                results[subject_id] = {}
-                            if tract_name not in results[subject_id]:
-                                results[subject_id][tract_name] = {}
-                        except (OSError, ValueError) as e:
-                            # OSError catches system-level errors
-                            # ValueError catches other processing errors
-                            logger.exception("Error processing %s/%s: %s", subject_id, tract_name, type(e).__name__)
-                            if subject_id not in results:
-                                results[subject_id] = {}
-                            if tract_name not in results[subject_id]:
-                                results[subject_id][tract_name] = {}
-                        except Exception as e:
-                            # Catch any other unexpected exceptions
+                                if subject_id not in results:
+                                    results[subject_id] = {}
+                                if tract_name not in results[subject_id]:
+                                    results[subject_id][tract_name] = {}
+                            finally:
+                                # Clean up future reference
+                                del future
+                    except RuntimeError as e:
+                        # Catch BrokenProcessPool that might break out of the loop
+                        error_type = type(e).__name__
+                        error_msg = str(e)
+                        if (
+                            "BrokenProcessPool" in error_type
+                            or "BrokenProcessPool" in error_msg
+                            or "process pool" in error_msg.lower()
+                            or "was terminated abruptly" in error_msg
+                        ):
+                            broken_pool_detected = True
                             logger.exception(
-                                "Unexpected error processing %s/%s: %s",
-                                subject_id,
-                                tract_name,
-                                type(e).__name__,
+                                "BrokenProcessPool detected during result collection. Falling back to sequential processing",
                             )
-                            if subject_id not in results:
-                                results[subject_id] = {}
-                            if tract_name not in results[subject_id]:
-                                results[subject_id][tract_name] = {}
-                        finally:
-                            # Clean up future reference
-                            del future
+                        else:
+                            # Re-raise if it's a different RuntimeError
+                            raise
+                    except Exception as e:
+                        # Catch any other exceptions that might break the loop
+                        error_type = type(e).__name__
+                        error_msg = str(e)
+                        if (
+                            "BrokenProcessPool" in error_type
+                            or "BrokenProcessPool" in error_msg
+                            or "process pool" in error_msg.lower()
+                            or "was terminated abruptly" in error_msg
+                        ):
+                            broken_pool_detected = True
+                            logger.exception(
+                                "BrokenProcessPool detected during result collection (caught as Exception). Falling back to sequential processing",
+                            )
+                        else:
+                            # Log but don't re-raise - try to continue with what we have
+                            logger.exception("Unexpected error during result collection: %s", type(e).__name__)
 
                     # If we detected a broken process pool, break out and fall back to sequential
                     if broken_pool_detected:
