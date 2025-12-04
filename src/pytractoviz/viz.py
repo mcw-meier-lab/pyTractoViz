@@ -231,6 +231,48 @@ def _set_memory_limit(memory_limit_mb: float | None = None) -> None:
         logger.warning("Failed to set memory limit: %s", e)
 
 
+def _estimate_actor_memory_mb(streamlines: Streamlines, figure_size: tuple[int, int] = (800, 800)) -> float:
+    """Estimate memory needed for creating VTK actors and rendering.
+
+    Parameters
+    ----------
+    streamlines : Streamlines
+        The streamlines to visualize.
+    figure_size : tuple[int, int], default=(800, 800)
+        Size of output image in pixels.
+
+    Returns
+    -------
+    float
+        Estimated memory in MB needed for actor creation and rendering.
+    """
+    # Count total points
+    total_points = sum(len(sl) for sl in streamlines)
+    num_streamlines = len(streamlines)
+
+    # Estimate memory:
+    # - VTK actor data: ~100 bytes per point (coordinates, colors, etc.)
+    # - Scene rendering buffer: image_size * 4 bytes (RGBA) * 2 (double buffering)
+    # - Additional overhead: ~20% for VTK internal structures
+
+    actor_memory_mb = (total_points * 100) / (1024**2)  # Actor data
+    render_memory_mb = (figure_size[0] * figure_size[1] * 4 * 2) / (1024**2)  # Render buffer
+    overhead_mb = (actor_memory_mb + render_memory_mb) * 0.2  # 20% overhead
+
+    total_mb = actor_memory_mb + render_memory_mb + overhead_mb
+
+    logger.debug(
+        "Estimated memory for actor: %.2f MB (points=%d, streamlines=%d, image=%dx%d)",
+        total_mb,
+        total_points,
+        num_streamlines,
+        figure_size[0],
+        figure_size[1],
+    )
+
+    return total_mb
+
+
 def _check_memory_available(required_mb: float, safety_margin: float = 0.2) -> bool:
     """Check if enough memory is available before loading data.
 
@@ -1672,14 +1714,38 @@ class TractographyVisualizer:
                     brain_actor = self.get_glass_brain(ref_img)
                     scene.add(brain_actor)
 
+                # Check memory before creating large VTK actor
+                estimated_memory = _estimate_actor_memory_mb(tract_streamlines, figure_size)
+                if not _check_memory_available(estimated_memory, safety_margin=0.3):
+                    logger.warning(
+                        "Insufficient memory to create actor for %d streamlines. Skipping view %s",
+                        len(tract_streamlines),
+                        view_name,
+                    )
+                    continue
+
                 # Use CCI array directly with original streamlines (no rotation - camera handles view)
-                tract_actor = actor.line(
-                    tract_streamlines,
-                    colors=cci,
-                    linewidth=0.1,
-                    lookup_colormap=lut_cmap,
-                )
-                scene.add(tract_actor)
+                try:
+                    tract_actor = actor.line(
+                        tract_streamlines,
+                        colors=cci,
+                        linewidth=0.1,
+                        lookup_colormap=lut_cmap,
+                    )
+                    scene.add(tract_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed for view %s (likely std::bad_alloc). "
+                            "Try reducing tract size, image resolution, or using n_jobs=1.",
+                            view_name,
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        continue
+                    raise
 
                 # Set camera position for anatomical view using utility function
                 bbox_size = calculate_bbox_size(tract_streamlines)
