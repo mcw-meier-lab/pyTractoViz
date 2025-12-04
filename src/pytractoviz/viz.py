@@ -1388,8 +1388,23 @@ class TractographyVisualizer:
 
         generated_views: dict[str, Path] = {}
 
+        # Check if all output files already exist BEFORE loading atlas tract
+        # This prevents unnecessary memory usage when files are already generated
+        all_files_exist = True
+        for view_name in views_to_generate:
+            output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
+            if output_image.exists():
+                generated_views[view_name] = output_image
+                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            else:
+                all_files_exist = False
+
+        # If all files exist, return early without loading atlas tract
+        if all_files_exist:
+            return generated_views
+
         try:
-            # Load atlas tract once
+            # Load atlas tract only if we need to generate at least one view
             atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
             atlas_tract.to_rasmm()
 
@@ -1426,10 +1441,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create scene using helper method
@@ -2150,8 +2163,23 @@ class TractographyVisualizer:
         atlas_name = self._extract_tract_name(atlas_file)
         generated_views: dict[str, Path] = {}
 
+        # Check if all output files already exist BEFORE loading tracts
+        # This prevents unnecessary memory usage when files are already generated
+        all_files_exist = True
+        for view_name in views_to_generate:
+            output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
+            if output_image.exists():
+                generated_views[view_name] = output_image
+                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            else:
+                all_files_exist = False
+
+        # If all files exist, return early without loading tracts
+        if all_files_exist:
+            return generated_views
+
         try:
-            # Load both tracts
+            # Load both tracts only if we need to generate at least one view
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
             tract.to_rasmm()
 
@@ -2191,10 +2219,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create scene using helper method
@@ -2353,8 +2379,23 @@ class TractographyVisualizer:
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
+        # Check if all output files already exist BEFORE loading tract
+        # This prevents unnecessary memory usage when files are already generated
+        all_files_exist = True
+        for view_name in views_to_generate:
+            output_image = output_dir / f"cci_before_after_{tract_name}_{view_name}.png"
+            if output_image.exists():
+                generated_views[view_name] = output_image
+                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            else:
+                all_files_exist = False
+
+        # If all files exist, return early without loading tract
+        if all_files_exist:
+            return generated_views
+
         try:
-            # Load tract
+            # Load tract only if we need to generate at least one view
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
             tract.to_rasmm()
 
@@ -2392,10 +2433,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"cci_before_after_{tract_name}_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create side-by-side scenes using helper methods
@@ -2612,8 +2651,23 @@ class TractographyVisualizer:
         tract_name = self._extract_tract_name(tract_file)
         generated_views: dict[str, Path] = {}
 
+        # Check if all output files already exist BEFORE loading tracts
+        # This prevents unnecessary memory usage when files are already generated
+        all_files_exist = True
+        for view_name in views_to_generate:
+            output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
+            if output_image.exists():
+                generated_views[view_name] = output_image
+                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            else:
+                all_files_exist = False
+
+        # If all files exist, return early without loading tracts
+        if all_files_exist:
+            return generated_views
+
         try:
-            # Load both tracts
+            # Load both tracts only if we need to generate at least one view
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
             tract.to_rasmm()
 
@@ -2708,10 +2762,8 @@ class TractographyVisualizer:
             for view_name in views_to_generate:
                 output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
 
-                # Skip if file already exists
+                # Skip if file already exists (already added to generated_views above)
                 if output_image.exists():
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                    generated_views[view_name] = output_image
                     continue
 
                 # Create scene using helper method
