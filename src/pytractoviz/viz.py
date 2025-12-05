@@ -1586,9 +1586,12 @@ class TractographyVisualizer:
                             len(tract_streamlines),
                             sum(len(sl) for sl in tract_streamlines),
                         )
+                        # Clean up and skip this view
                         scene.clear()
                         if tract_actor is not None:
                             del tract_actor
+                        del scene
+                        gc.collect()
                         continue
                     raise
 
@@ -1611,9 +1614,12 @@ class TractographyVisualizer:
                         "Failed to set camera for view %s. Skipping view.",
                         view_name,
                     )
+                    # Clean up and skip this view
                     scene.clear()
                     if tract_actor is not None:
                         del tract_actor
+                    del scene
+                    gc.collect()
                     continue
 
                 # Record the scene (this can also fail with std::bad_alloc or segfault)
@@ -1632,7 +1638,7 @@ class TractographyVisualizer:
 
                 try:
                     window.record(
-                        scene=scene,
+                        scene=scene,  # noqa: F821
                         out_path=str(output_image),
                         size=figure_size,
                     )
@@ -1651,15 +1657,24 @@ class TractographyVisualizer:
                             sum(len(sl) for sl in tract_streamlines),
                         )
                         # Clean up and skip this view
-                        scene.clear()
+                        scene.clear()  # noqa: F821
                         if tract_actor is not None:
                             del tract_actor
+                        del scene  # noqa: F821
+                        gc.collect()
                         continue
                     raise
 
-                scene.clear()
+                # Explicitly clean up scene and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+                scene.clear()  # noqa: F821
                 if tract_actor is not None:
                     del tract_actor
+                del scene  # noqa: F821
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
+                gc.collect()
 
             # Clean up remaining large objects
             del tract_streamlines, streamline_colors
@@ -1897,11 +1912,20 @@ class TractographyVisualizer:
                         # Clean up and skip this view
                         scene.clear()
                         del tract_actor
+                        del scene
+                        gc.collect()
                         continue
                     raise
 
+                # Explicitly clean up scene and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene.clear()
                 del tract_actor
+                del scene
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
+                gc.collect()
 
             # Clean up large objects
             del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
@@ -2131,6 +2155,8 @@ class TractographyVisualizer:
                         )
                         # Clean up and skip this view
                         scene.clear()
+                        del scene
+                        gc.collect()
                         continue
                     raise
 
@@ -2417,10 +2443,19 @@ class TractographyVisualizer:
                         )
                         # Clean up and skip this view
                         scene.clear()
+                        del scene
+                        gc.collect()
                         continue
                     raise
 
+                # Explicitly clean up scene to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene.clear()
+                del scene
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
+                gc.collect()
 
             # Also create the profile line plot (if it doesn't already exist)
             if not profile_plot_path.exists():
@@ -2802,15 +2837,21 @@ class TractographyVisualizer:
                         del subject_actor, atlas_actor
                         if show_glass_brain:
                             del brain_actor
+                        del scene
                         gc.collect()
                         continue
                     raise
 
-                # Clean up
+                # Explicitly clean up scene and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene.clear()
                 del subject_actor, atlas_actor
                 if show_glass_brain:
                     del brain_actor
+                del scene
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
                 gc.collect()
 
                 generated_views[view_name] = output_image
@@ -3075,6 +3116,7 @@ class TractographyVisualizer:
                             len(after_streamlines),
                         )
                         # Clean up and skip this view
+                        # Clean up and skip this view
                         scene_before.clear()
                         scene_after.clear()
                         del before_actor, after_actor
@@ -3119,11 +3161,17 @@ class TractographyVisualizer:
                 os.unlink(tmp_after_path)
 
                 # Clean up scenes
+                # Explicitly clean up scenes and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene_before.clear()
                 scene_after.clear()
                 del before_actor, after_actor
                 if show_glass_brain:
                     del brain_actor_before, brain_actor_after
+                del scene_before, scene_after
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
                 gc.collect()
 
                 generated_views[view_name] = output_image
@@ -3443,15 +3491,21 @@ class TractographyVisualizer:
                         del tract_actor
                         if show_glass_brain:
                             del brain_actor
+                        del scene
                         gc.collect()
                         continue
                     raise
 
-                # Clean up
+                # Explicitly clean up scene and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene.clear()
                 del tract_actor
                 if show_glass_brain:
                     del brain_actor
+                del scene
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
                 gc.collect()
 
                 generated_views[view_name] = output_image
@@ -3632,10 +3686,15 @@ class TractographyVisualizer:
                 del stream_actor, rotated_streamlines
                 gc.collect()
 
-            # Clean up scene and actors after all frames are captured
+            # Explicitly clean up scene and actors after all frames are captured
+            # VTK/FURY objects can hold circular references, so explicit cleanup is critical
             scene.clear()
             del tract_actor, brain_actor, scene
             del tract, tract_streamlines, ref_img_obj
+
+            # Force garbage collection to free memory
+            # This is critical for large tractograms to prevent OOM kills
+            gc.collect()
 
             # Save as optimized GIF
             imageio.mimsave(
