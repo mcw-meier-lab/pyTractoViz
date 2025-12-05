@@ -32,6 +32,7 @@ from dipy.segment.clustering import QuickBundles
 from dipy.segment.featurespeed import ResampleFeature
 from dipy.segment.metricspeed import AveragePointwiseEuclideanMetric
 from dipy.stats.analysis import afq_profile, assignment_map, gaussian_weights
+from dipy.tracking.distances import approx_polygon_track
 from dipy.tracking.streamline import (
     Streamlines,
     cluster_confidence,
@@ -1187,6 +1188,8 @@ class TractographyVisualizer:
         show_glass_brain: bool = True,
         max_streamlines: int | None = None,
         subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Generate snapshots from standard anatomical views.
 
@@ -1217,6 +1220,14 @@ class TractographyVisualizer:
         subsample_factor : float | None, optional
             Factor to subsample streamlines (0.0 to 1.0). If 0.5, keeps 50% of
             streamlines. If None, no subsampling. Default is None.
+        max_points_per_streamline : int | None, optional
+            Maximum number of points per streamline. Streamlines with more points
+            will be resampled to this limit. This can help avoid VTK segfaults
+            by reducing total point count. Default is None (no limit).
+        resample_streamlines : bool, optional
+            If True, resample all streamlines using approx_polygon_track with
+            distance=0.25 to reduce point count. This is a more aggressive
+            resampling that reduces points while preserving shape. Default is False.
 
         Returns
         -------
@@ -1347,6 +1358,49 @@ class TractographyVisualizer:
                         original_count,
                         len(tract_streamlines),
                         subsample_factor,
+                    )
+
+            # Resample streamlines to reduce points if requested
+            if resample_streamlines:
+                # Use approx_polygon_track to reduce points while preserving shape
+                resampled = Streamlines()
+                total_points_before = sum(len(sl) for sl in tract_streamlines)
+                for sl in tract_streamlines:
+                    resampled_sl = approx_polygon_track(sl, 0.25)
+                    resampled.append(resampled_sl)
+                tract_streamlines = resampled
+                total_points_after = sum(len(sl) for sl in tract_streamlines)
+                logger.info(
+                    "Resampled streamlines: %d total points -> %d total points (reduction: %.1f%%)",
+                    total_points_before,
+                    total_points_after,
+                    (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
+                )
+            elif max_points_per_streamline is not None:
+                # Resample only streamlines that exceed the limit
+                resampled = Streamlines()
+                total_points_before = sum(len(sl) for sl in tract_streamlines)
+                resampled_count = 0
+                for sl in tract_streamlines:
+                    if len(sl) > max_points_per_streamline:
+                        # Resample to max_points_per_streamline by evenly spacing points
+                        indices_array = np.linspace(0, len(sl) - 1, max_points_per_streamline, dtype=int)
+                        sl_array = np.array(sl)
+                        resampled_sl = sl_array[indices_array].tolist()
+                        resampled.append(resampled_sl)
+                        resampled_count += 1
+                    else:
+                        resampled.append(sl)
+                tract_streamlines = resampled
+                total_points_after = sum(len(sl) for sl in tract_streamlines)
+                if resampled_count > 0:
+                    logger.info(
+                        "Resampled %d streamlines exceeding %d points: %d total points -> %d total points (reduction: %.1f%%)",
+                        resampled_count,
+                        max_points_per_streamline,
+                        total_points_before,
+                        total_points_after,
+                        (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
                     )
 
             # Calculate colors based on streamline directions using utility function
