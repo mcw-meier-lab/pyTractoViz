@@ -514,6 +514,8 @@ def _process_tract_worker(
     flip_lr: bool,
     skip_checks: list[str],
     visualizer_params: dict[str, Any],
+    subject_kwargs: dict[str, Any] | None = None,
+    atlas_kwargs: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> tuple[str, str, dict[str, str | Path]]:
     """Worker function for parallel processing of tracts.
@@ -574,6 +576,8 @@ def _process_tract_worker(
                 atlas_ref_img=atlas_ref_img,
                 flip_lr=flip_lr,
                 skip_checks=skip_checks,
+                subject_kwargs=subject_kwargs,
+                atlas_kwargs=atlas_kwargs,
                 **kwargs,
             )
         except MemoryError:
@@ -3662,6 +3666,8 @@ class TractographyVisualizer:
         *,
         flip_lr: bool,
         skip_checks: list[str],
+        subject_kwargs: dict[str, Any] | None = None,
+        atlas_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, str | Path]:
         """Process a single subject/tract combination.
@@ -3671,6 +3677,11 @@ class TractographyVisualizer:
         """
         tract_results: dict[str, str | Path] = {}
 
+        # Merge kwargs: subject_kwargs override general kwargs for subject methods
+        subject_merged_kwargs = {**kwargs, **(subject_kwargs or {})}
+        # Merge kwargs: atlas_kwargs override general kwargs for atlas methods
+        atlas_merged_kwargs = {**kwargs, **(atlas_kwargs or {})}
+
         try:
             # 1. Standard anatomical views
             if "anatomical_views" not in skip_checks:
@@ -3679,7 +3690,7 @@ class TractographyVisualizer:
                         tract_file,
                         output_dir=tract_output_dir,
                         ref_img=subject_ref_img,
-                        **kwargs,
+                        **subject_merged_kwargs,
                     )
                     # Add anatomical views to results
                     for view_name, view_path in anatomical_views.items():
@@ -3699,7 +3710,7 @@ class TractographyVisualizer:
                         tract_file,  # type: ignore[arg-type]
                         output_dir=tract_output_dir,
                         ref_img=subject_ref_img,
-                        **kwargs,
+                        **subject_merged_kwargs,
                     )
                     # Add CCI plots to results
                     for plot_type, plot_path in cci_plots.items():
@@ -3719,7 +3730,7 @@ class TractographyVisualizer:
                         tract_file,
                         output_dir=tract_output_dir,
                         ref_img=subject_ref_img,
-                        **kwargs,
+                        **subject_merged_kwargs,
                     )
                     # Add before/after views to results
                     for view_name, view_path in before_after_views.items():
@@ -3748,7 +3759,7 @@ class TractographyVisualizer:
                             tract_file_mni,
                             ref_img=atlas_ref_img,  # Use atlas ref image for MNI space
                             output_dir=tract_output_dir,
-                            **kwargs,
+                            **subject_merged_kwargs,  # Subject files use subject_kwargs
                         )
                         # Add subject MNI views to results
                         for view_name, view_path in subject_mni_views.items():
@@ -3760,7 +3771,7 @@ class TractographyVisualizer:
                         atlas_ref_img=atlas_ref_img,
                         flip_lr=flip_lr,
                         output_dir=tract_output_dir,
-                        **kwargs,
+                        **atlas_merged_kwargs,  # Atlas files use atlas_kwargs
                     )
                     # Add atlas views to results
                     for view_name, view_path in atlas_views.items():
@@ -3795,14 +3806,14 @@ class TractographyVisualizer:
                     )
                     tract_results["shape_similarity_score"] = str(similarity_score)
 
-                    # Visualize shape similarity
+                    # Visualize shape similarity (uses subject tract, so use subject_kwargs)
                     similarity_views = self.visualize_shape_similarity(
                         tract_file_mni,
                         atlas_file,
                         atlas_ref_img=atlas_ref_img,
                         flip_lr=flip_lr,
                         output_dir=tract_output_dir,
-                        **kwargs,
+                        **subject_merged_kwargs,
                     )
                     # Add similarity views to results
                     for view_name, view_path in similarity_views.items():
@@ -3829,7 +3840,7 @@ class TractographyVisualizer:
                             model_file,
                             ref_img=subject_ref_img,
                             output_dir=tract_output_dir,
-                            **kwargs,
+                            **subject_merged_kwargs,
                         )
                         # Add AFQ plots to results
                         for plot_type, plot_path in afq_plots.items():
@@ -3860,7 +3871,7 @@ class TractographyVisualizer:
                         model_file,
                         output_dir=tract_output_dir,
                         ref_img=subject_ref_img,
-                        **kwargs,
+                        **subject_merged_kwargs,
                     )
                     # Add assignment views to results
                     for view_name, view_path in assignment_views.items():
@@ -3895,6 +3906,8 @@ class TractographyVisualizer:
         html_output: str | Path | None = None,
         skip_checks: list[str] | None = None,
         n_jobs: int | None = None,
+        subject_kwargs: dict[str, Any] | None = None,
+        atlas_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, dict[str, dict[str, str | Path]]]:
         """Run comprehensive quality checks for multiple subjects and tracts.
@@ -4002,8 +4015,19 @@ class TractographyVisualizer:
             SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
             it will divide the available CPUs by the number of OpenMP threads to
             prevent resource contention.
+        subject_kwargs : dict[str, Any] | None, optional
+            Additional keyword arguments passed only to subject tract visualization
+            methods (e.g., `generate_anatomical_views` for subject files).
+            These kwargs are NOT passed to atlas visualization methods.
+            Example: `{"max_streamlines": 500, "max_points_per_streamline": 100}`
+        atlas_kwargs : dict[str, Any] | None, optional
+            Additional keyword arguments passed only to atlas visualization methods
+            (e.g., `generate_atlas_views`). These kwargs are NOT passed to subject
+            visualization methods. If None, atlas methods use default parameters.
         **kwargs
-            Additional keyword arguments passed to individual quality check methods.
+            Additional keyword arguments passed to ALL quality check methods
+            (both subject and atlas). Use `subject_kwargs` or `atlas_kwargs` to
+            pass different parameters to subject vs atlas methods.
 
         Returns
         -------
@@ -4186,6 +4210,8 @@ class TractographyVisualizer:
                             flip_lr=flip_lr,
                             skip_checks=skip_checks,
                             visualizer_params=visualizer_params,
+                            subject_kwargs=subject_kwargs,
+                            atlas_kwargs=atlas_kwargs,
                             **kwargs,
                         ): (subject_id, tract_name)
                         for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks
@@ -4379,6 +4405,8 @@ class TractographyVisualizer:
                                 atlas_ref_img=atlas_ref_img,
                                 flip_lr=flip_lr,
                                 skip_checks=skip_checks,
+                                subject_kwargs=subject_kwargs,
+                                atlas_kwargs=atlas_kwargs,
                                 **kwargs,
                             )
                             results[subject_id][tract_name] = tract_result
@@ -4426,6 +4454,8 @@ class TractographyVisualizer:
                         atlas_ref_img=atlas_ref_img,
                         flip_lr=flip_lr,
                         skip_checks=skip_checks,
+                        subject_kwargs=subject_kwargs,
+                        atlas_kwargs=atlas_kwargs,
                         **kwargs,
                     )
                     results[subject_id][tract_name] = tract_result
