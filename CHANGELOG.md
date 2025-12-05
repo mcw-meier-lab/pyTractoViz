@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.3.5](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.3.5) - 2025-12-05
+
+<small>[Compare with 0.3.4](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.3.4...0.3.5)</small>
+
+### Bug Fixes
+
+- add streamline filtering to other functions ([6dfb737](https://github.com/mcw-meier-lab/pyTractoViz/commit/6dfb7371c96227e3bf0cccaf6bde94ce8cd492cd) by Lezlie Espana).
+
 ## [0.3.4](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.3.4) - 2025-12-05
 
 <small>[Compare with 0.3.3](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.3.3...0.3.4)</small>
