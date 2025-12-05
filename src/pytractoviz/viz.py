@@ -58,6 +58,11 @@ from pytractoviz.utils import (
 
 logger = logging.getLogger(__name__)
 
+# Constants for memory estimation and warnings
+MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD = 10000  # Streamlines with >10k points risk fragmentation
+DENSE_TRACT_POINT_THRESHOLD = 1000000  # >1M total points triggers dense tract warning
+VERY_LONG_STREAMLINE_POINT_THRESHOLD = 50000  # Streamlines with >50k points trigger warning
+
 
 def _log_memory_usage(
     label: str = "",
@@ -250,22 +255,43 @@ def _estimate_actor_memory_mb(streamlines: Streamlines, figure_size: tuple[int, 
     total_points = sum(len(sl) for sl in streamlines)
     num_streamlines = len(streamlines)
 
+    # Calculate average points per streamline
+    avg_points_per_sl = total_points / num_streamlines if num_streamlines > 0 else 0
+    max_points_per_sl = max(len(sl) for sl in streamlines) if streamlines else 0
+
     # Estimate memory:
-    # - VTK actor data: ~100 bytes per point (coordinates, colors, etc.)
-    # - Scene rendering buffer: image_size * 4 bytes (RGBA) * 2 (double buffering)
-    # - Additional overhead: ~20% for VTK internal structures
+    # - VTK actor data: ~200 bytes per point (coordinates, colors, normals, etc.)
+    #   (increased from 100 to account for VTK's internal structures)
+    # - Scene rendering buffer: image_size * 4 bytes (RGBA) * 3 (triple buffering for safety)
+    # - Additional overhead: ~30% for VTK internal structures and fragmentation
+    # - Large contiguous allocation penalty: if max streamline is very long, VTK may need
+    #   a large contiguous buffer, which can fail even with available memory due to fragmentation
 
-    actor_memory_mb = (total_points * 100) / (1024**2)  # Actor data
-    render_memory_mb = (figure_size[0] * figure_size[1] * 4 * 2) / (1024**2)  # Render buffer
-    overhead_mb = (actor_memory_mb + render_memory_mb) * 0.2  # 20% overhead
+    actor_memory_mb = (total_points * 200) / (1024**2)  # Actor data (increased estimate)
+    render_memory_mb = (figure_size[0] * figure_size[1] * 4 * 3) / (1024**2)  # Render buffer (triple buffering)
 
-    total_mb = actor_memory_mb + render_memory_mb + overhead_mb
+    # Add penalty for very long streamlines (fragmentation risk)
+    # If any streamline has >10k points, VTK needs a large contiguous buffer
+    fragmentation_penalty_mb = 0.0
+    if max_points_per_sl > MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD:
+        # Large contiguous allocation needed - add 50% overhead for fragmentation
+        fragmentation_penalty_mb = actor_memory_mb * 0.5
+        logger.warning(
+            "Very long streamline detected (%d points). VTK may need large contiguous memory allocation.",
+            max_points_per_sl,
+        )
 
-    logger.debug(
-        "Estimated memory for actor: %.2f MB (points=%d, streamlines=%d, image=%dx%d)",
+    overhead_mb = (actor_memory_mb + render_memory_mb) * 0.3  # 30% overhead
+    total_mb = actor_memory_mb + render_memory_mb + overhead_mb + fragmentation_penalty_mb
+
+    logger.info(
+        "Memory estimate for actor: %.2f MB (total_points=%d, streamlines=%d, "
+        "avg_points/sl=%.1f, max_points/sl=%d, image=%dx%d)",
         total_mb,
         total_points,
         num_streamlines,
+        avg_points_per_sl,
+        max_points_per_sl,
         figure_size[0],
         figure_size[1],
     )
@@ -1264,6 +1290,35 @@ class TractographyVisualizer:
             # Get centroid using utility function
             centroid = calculate_centroid(tract_streamlines)
 
+            # Log tract statistics for debugging
+            total_points = sum(len(sl) for sl in tract_streamlines)
+            avg_points = total_points / len(tract_streamlines) if tract_streamlines else 0
+            max_points = max(len(sl) for sl in tract_streamlines) if tract_streamlines else 0
+            logger.info(
+                "Tract statistics: %d streamlines, %d total points, "
+                "%.1f avg points/streamline, %d max points/streamline",
+                len(tract_streamlines),
+                total_points,
+                avg_points,
+                max_points,
+            )
+
+            # Warn if tract is very dense (high risk of std::bad_alloc)
+            if total_points > DENSE_TRACT_POINT_THRESHOLD:
+                logger.warning(
+                    "Very dense tract detected (%d total points). "
+                    "This may cause std::bad_alloc errors due to memory fragmentation. "
+                    "Consider: (1) resampling streamlines to reduce points, "
+                    "(2) filtering with higher cci_threshold, (3) reducing image resolution.",
+                    total_points,
+                )
+            if max_points > VERY_LONG_STREAMLINE_POINT_THRESHOLD:
+                logger.warning(
+                    "Very long streamline detected (%d points). "
+                    "VTK may need large contiguous memory allocation which can fail due to fragmentation.",
+                    max_points,
+                )
+
             # Clean up loaded objects that are no longer needed
             del tract, ref_img_obj
 
@@ -1275,12 +1330,37 @@ class TractographyVisualizer:
                 if output_image.exists():
                     continue
 
+                # Check memory before creating VTK actor
+                estimated_memory = _estimate_actor_memory_mb(tract_streamlines, figure_size)
+                if not _check_memory_available(estimated_memory, safety_margin=0.3):
+                    logger.warning(
+                        "Insufficient memory to create actor for view %s. Skipping.",
+                        view_name,
+                    )
+                    continue
+
                 # Create scene using helper method
                 scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
 
                 # Create actor with original streamlines using helper method
-                tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
-                scene.add(tract_actor)
+                try:
+                    tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
+                    scene.add(tract_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution or filtering streamlines.",
+                            view_name,
+                            len(tract_streamlines),
+                            sum(len(sl) for sl in tract_streamlines),
+                        )
+                        scene.clear()
+                        continue
+                    raise
 
                 # Set camera position for anatomical view (no streamline rotation needed)
                 # Calculate bbox for camera distance using utility function
@@ -1505,16 +1585,34 @@ class TractographyVisualizer:
                     bbox_size=bbox_size,
                 )
 
-                # Record the scene
-                window.record(
-                    scene=scene,
-                    out_path=str(output_image),
-                    size=figure_size,
-                )
+                # Record the scene (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(atlas_streamlines),
+                            sum(len(sl) for sl in atlas_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del tract_actor
+                        continue
+                    raise
+
                 scene.clear()
                 del tract_actor
-
-                generated_views[view_name] = output_image
 
             # Clean up large objects
             del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
@@ -1758,12 +1856,35 @@ class TractographyVisualizer:
                     bbox_size=bbox_size,
                 )
 
-                # Record the scene
-                window.record(
-                    scene=scene,
-                    out_path=str(output_image),
-                    size=figure_size,
-                )
+                # Record the scene (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(tract_streamlines),
+                            sum(len(sl) for sl in tract_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del tract_actor
+                        if brain_actor is not None:
+                            del brain_actor
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
 
                 # Explicitly clean up scene and actors to free memory
                 # VTK/FURY objects can hold circular references, so explicit cleanup is critical
@@ -1972,15 +2093,32 @@ class TractographyVisualizer:
                     bbox_size=bbox_size,
                 )
 
-                # Record the scene
-                window.record(
-                    scene=scene,
-                    out_path=str(output_image),
-                    size=figure_size,
-                )
-                scene.clear()
+                # Record the scene (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(tract_streamlines),
+                            sum(len(sl) for sl in tract_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        continue
+                    raise
 
-                generated_views[view_name] = output_image
+                scene.clear()
 
             # Also create the profile line plot (if it doesn't already exist)
             if not profile_plot_path.exists():
@@ -2317,12 +2455,34 @@ class TractographyVisualizer:
                     bbox_size=bbox_size,
                 )
 
-                # Record the scene
-                window.record(
-                    scene=scene,
-                    out_path=str(output_image),
-                    size=figure_size,
-                )
+                # Record the scene (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Subject has %d streamlines, atlas has %d streamlines. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(subject_streamlines),
+                            len(atlas_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del subject_actor, atlas_actor
+                        if show_glass_brain:
+                            del brain_actor
+                        gc.collect()
+                        continue
+                    raise
 
                 # Clean up
                 scene.clear()
@@ -2548,16 +2708,46 @@ class TractographyVisualizer:
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_after:
                     tmp_after_path = tmp_after.name
 
-                window.record(
-                    scene=scene_before,
-                    out_path=tmp_before_path,
-                    size=figure_size,
-                )
-                window.record(
-                    scene=scene_after,
-                    out_path=tmp_after_path,
-                    size=figure_size,
-                )
+                # Record both scenes (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene_before,
+                        out_path=tmp_before_path,
+                        size=figure_size,
+                    )
+                    window.record(
+                        scene=scene_after,
+                        out_path=tmp_after_path,
+                        size=figure_size,
+                    )
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Before has %d streamlines, after has %d streamlines. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(before_streamlines),
+                            len(after_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene_before.clear()
+                        scene_after.clear()
+                        del before_actor, after_actor
+                        if brain_actor_before is not None:
+                            del brain_actor_before
+                        if brain_actor_after is not None:
+                            del brain_actor_after
+                        del scene_before, scene_after
+                        gc.collect()
+                        # Clean up temp files if they were created
+                        with contextlib.suppress(OSError):
+                            os.unlink(tmp_before_path)
+                            os.unlink(tmp_after_path)
+                        continue
+                    raise
 
                 # Combine images side-by-side using PIL/Pillow or imageio
                 try:
@@ -2866,12 +3056,34 @@ class TractographyVisualizer:
                     bbox_size=bbox_size,
                 )
 
-                # Record the scene
-                window.record(
-                    scene=scene,
-                    out_path=str(output_image),
-                    size=figure_size,
-                )
+                # Record the scene (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(tract_streamlines),
+                            sum(len(sl) for sl in tract_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del tract_actor
+                        if show_glass_brain:
+                            del brain_actor
+                        gc.collect()
+                        continue
+                    raise
 
                 # Clean up
                 scene.clear()
@@ -3012,8 +3224,34 @@ class TractographyVisualizer:
                 scene.add(stream_actor)
                 scene.add(brain_actor)
 
-                frame = window.snapshot(scene, size=self.gif_size)
-                gif_frames.append(frame)
+                # Snapshot can also fail with std::bad_alloc
+                try:
+                    frame = window.snapshot(scene, size=self.gif_size)
+                    gif_frames.append(frame)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during snapshot
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during GIF frame snapshot (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing gif_size or processing with n_jobs=1.",
+                            len(tract_streamlines),
+                            sum(len(sl) for sl in tract_streamlines),
+                        )
+                        # Clean up and break out of loop
+                        scene.clear()
+                        del stream_actor, rotated_streamlines
+                        gc.collect()
+                        # If we have some frames, save what we have
+                        if gif_frames:
+                            logger.warning("Saving partial GIF with %d frames", len(gif_frames))
+                        else:
+                            # No frames captured, skip this view
+                            del gif_frames, tract_actor, brain_actor, scene
+                            gc.collect()
+                            continue
+                    raise
 
                 # Force memory cleanup
                 del stream_actor, rotated_streamlines
