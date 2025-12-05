@@ -696,6 +696,10 @@ class TractographyVisualizer:
 
         Note: This uses resource.setrlimit() which sets a virtual memory limit.
         Once set, the limit cannot be increased (only decreased).
+    figure_size : tuple[int, int], optional
+        Default size for generated static images in pixels. Default is (800, 800).
+        Can be overridden per method call. Smaller sizes use less memory and may
+        help avoid VTK segfaults with large tractograms.
 
     Examples
     --------
@@ -733,6 +737,7 @@ class TractographyVisualizer:
         afq_resample_points: int = 100,
         n_jobs: int = 1,
         max_memory_mb: float | None = None,
+        figure_size: tuple[int, int] = (800, 800),
     ) -> None:
         """Initialize the TractographyVisualizer."""
         self._reference_image: Path | None = None
@@ -751,6 +756,7 @@ class TractographyVisualizer:
         self.min_streamline_length = min_streamline_length
         self.cci_threshold = cci_threshold
         self.afq_resample_points = afq_resample_points
+        self.figure_size = figure_size
         # Handle n_jobs: -1 means use all CPUs, otherwise use specified value
         if n_jobs == -1:
             self.n_jobs = _get_optimal_n_jobs()
@@ -1176,7 +1182,7 @@ class TractographyVisualizer:
         *,
         views: list[str] | None = None,
         output_dir: str | Path | None = None,
-        figure_size: tuple[int, int] = (800, 800),
+        figure_size: tuple[int, int] | None = None,
         show_glass_brain: bool = True,
     ) -> dict[str, Path]:
         """Generate snapshots from standard anatomical views.
@@ -1196,8 +1202,9 @@ class TractographyVisualizer:
         output_dir : str | Path | None, optional
             Output directory for generated images. If None, uses the output
             directory set during initialization.
-        figure_size : tuple[int, int], optional
-            Size of the output images in pixels. Default is (800, 800).
+        figure_size : tuple[int, int] | None, optional
+            Size of the output images in pixels. If None, uses the default
+            set during initialization (default: (800, 800)). Default is None.
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
 
@@ -1228,6 +1235,10 @@ class TractographyVisualizer:
         ...     "tract.trk", views=["coronal", "axial"]
         ... )
         """
+        # Use instance default if figure_size not provided
+        if figure_size is None:
+            figure_size = self.figure_size
+
         # Use standard anatomical view angles from utils
         view_angles = ANATOMICAL_VIEW_ANGLES
 
@@ -1373,6 +1384,7 @@ class TractographyVisualizer:
 
                 # Create actor with original streamlines using helper method
                 logger.debug("Creating streamline actor for view %s", view_name)
+                tract_actor = None
                 try:
                     tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
                     logger.debug("Streamline actor created, adding to scene")
@@ -1391,31 +1403,67 @@ class TractographyVisualizer:
                             sum(len(sl) for sl in tract_streamlines),
                         )
                         scene.clear()
+                        if tract_actor is not None:
+                            del tract_actor
                         continue
                     raise
 
                 # Set camera position for anatomical view (no streamline rotation needed)
                 # Calculate bbox for camera distance using utility function
+                logger.debug("Calculating bbox and setting camera for view %s", view_name)
                 bbox_size = calculate_bbox_size(tract_streamlines)
 
                 # Use helper method to set camera
-                self._set_anatomical_camera(
-                    scene,
-                    centroid,
-                    view_name,
-                    bbox_size=bbox_size,
-                )
+                try:
+                    self._set_anatomical_camera(
+                        scene,
+                        centroid,
+                        view_name,
+                        bbox_size=bbox_size,
+                    )
+                    logger.debug("Camera set successfully for view %s", view_name)
+                except (RuntimeError, OSError, MemoryError):
+                    logger.exception(
+                        "Failed to set camera for view %s. Skipping view.",
+                        view_name,
+                    )
+                    scene.clear()
+                    if tract_actor is not None:
+                        del tract_actor
+                    continue
 
-                # Record the scene
-                window.record(
-                    scene=scene,
-                    out_path=str(output_image),
-                    size=figure_size,
-                )
+                # Record the scene (this can also fail with std::bad_alloc or segfault)
+                logger.debug("Recording scene for view %s", view_name)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    logger.debug("Scene recorded successfully for view %s", view_name)
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(tract_streamlines),
+                            sum(len(sl) for sl in tract_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        if tract_actor is not None:
+                            del tract_actor
+                        continue
+                    raise
+
                 scene.clear()
-                del tract_actor
-
-                generated_views[view_name] = output_image
+                if tract_actor is not None:
+                    del tract_actor
 
             # Clean up remaining large objects
             del tract_streamlines, streamline_colors
