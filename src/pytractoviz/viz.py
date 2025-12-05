@@ -915,8 +915,17 @@ class TractographyVisualizer:
 
         brain_actor = None
         if show_glass_brain:
-            brain_actor = self.get_glass_brain(ref_img)
-            scene.add(brain_actor)
+            try:
+                brain_actor = self.get_glass_brain(ref_img)
+                scene.add(brain_actor)
+            except (RuntimeError, OSError, MemoryError) as e:
+                # Glass brain creation can fail with VTK errors
+                logger.warning(
+                    "Failed to create glass brain: %s. Continuing without glass brain.",
+                    e,
+                )
+                # Continue without glass brain rather than failing completely
+                brain_actor = None
 
         return scene, brain_actor
 
@@ -1339,13 +1348,36 @@ class TractographyVisualizer:
                     )
                     continue
 
-                # Create scene using helper method
-                scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+                # Create scene using helper method (can segfault in VTK)
+                logger.debug("Creating scene for view %s", view_name)
+                try:
+                    scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+                except (RuntimeError, OSError, MemoryError):
+                    # Catch VTK errors during scene creation
+                    logger.exception(
+                        "Failed to create scene for view %s. "
+                        "This may indicate a VTK segfault or memory issue. "
+                        "Try reducing image resolution or disabling glass brain.",
+                        view_name,
+                    )
+                    continue
+                except Exception:
+                    # Catch any other unexpected errors
+                    logger.exception(
+                        "Unexpected error creating scene for view %s",
+                        view_name,
+                    )
+                    continue
+
+                logger.debug("Scene created successfully for view %s", view_name)
 
                 # Create actor with original streamlines using helper method
+                logger.debug("Creating streamline actor for view %s", view_name)
                 try:
                     tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
+                    logger.debug("Streamline actor created, adding to scene")
                     scene.add(tract_actor)
+                    logger.debug("Streamline actor added to scene successfully")
                 except RuntimeError as e:
                     # Catch std::bad_alloc and other VTK errors
                     error_msg = str(e).lower()
