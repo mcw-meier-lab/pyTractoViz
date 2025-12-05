@@ -998,6 +998,117 @@ class TractographyVisualizer:
             return actor.line(streamlines, colors=colors[: len(streamlines)])
         return actor.line(streamlines)
 
+    def _filter_streamlines(
+        self,
+        streamlines: Streamlines,
+        *,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
+    ) -> Streamlines:
+        """Filter and resample streamlines to reduce memory usage.
+
+        Parameters
+        ----------
+        streamlines : Streamlines
+            The streamlines to filter.
+        max_streamlines : int | None, optional
+            Maximum number of streamlines to keep. If None, no limit.
+        subsample_factor : float | None, optional
+            Fraction of streamlines to keep (0-1). If None, no subsampling.
+        max_points_per_streamline : int | None, optional
+            Maximum points per streamline. Streamlines exceeding this will be resampled.
+        resample_streamlines : bool, optional
+            Whether to resample all streamlines using approx_polygon_track.
+
+        Returns
+        -------
+        Streamlines
+            Filtered and/or resampled streamlines.
+        """
+        filtered = streamlines
+        original_count = len(filtered)
+
+        # Subsample streamlines if requested
+        if max_streamlines is not None and len(filtered) > max_streamlines:
+            # Randomly subsample to max_streamlines
+            indices_array = np.random.choice(
+                len(filtered),
+                size=max_streamlines,
+                replace=False,
+            )
+            indices = sorted(indices_array.tolist())  # Keep original order
+            filtered = Streamlines([filtered[i] for i in indices])
+            logger.info(
+                "Subsampled streamlines from %d to %d (max_streamlines=%d)",
+                original_count,
+                len(filtered),
+                max_streamlines,
+            )
+        elif subsample_factor is not None and 0 < subsample_factor < 1:
+            # Subsample by factor
+            n_keep = int(len(filtered) * subsample_factor)
+            if n_keep < len(filtered):
+                indices_array = np.random.choice(
+                    len(filtered),
+                    size=n_keep,
+                    replace=False,
+                )
+                indices = sorted(indices_array.tolist())  # Keep original order
+                filtered = Streamlines([filtered[i] for i in indices])
+                logger.info(
+                    "Subsampled streamlines from %d to %d (factor=%.2f)",
+                    original_count,
+                    len(filtered),
+                    subsample_factor,
+                )
+
+        # Resample streamlines to reduce points if requested
+        if resample_streamlines:
+            # Use approx_polygon_track to reduce points while preserving shape
+            resampled = Streamlines()
+            total_points_before = sum(len(sl) for sl in filtered)
+            for sl in filtered:
+                resampled_sl = approx_polygon_track(sl, 0.25)
+                resampled.append(resampled_sl)
+            filtered = resampled
+            total_points_after = sum(len(sl) for sl in filtered)
+            logger.info(
+                "Resampled streamlines: %d total points -> %d total points (reduction: %.1f%%)",
+                total_points_before,
+                total_points_after,
+                (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
+            )
+        elif max_points_per_streamline is not None:
+            # Resample only streamlines that exceed the limit
+            resampled = Streamlines()
+            total_points_before = sum(len(sl) for sl in filtered)
+            resampled_count = 0
+            for sl in filtered:
+                if len(sl) > max_points_per_streamline:
+                    # Resample to max_points_per_streamline by evenly spacing points
+                    indices_array = np.linspace(0, len(sl) - 1, max_points_per_streamline, dtype=int)
+                    sl_array = np.array(sl)
+                    resampled_sl = sl_array[indices_array].tolist()
+                    resampled.append(resampled_sl)
+                    resampled_count += 1
+                else:
+                    resampled.append(sl)
+            filtered = resampled
+            total_points_after = sum(len(sl) for sl in filtered)
+            if resampled_count > 0:
+                logger.info(
+                    "Resampled %d streamlines exceeding %d points: %d total points -> %d total points (reduction: %.1f%%)",
+                    resampled_count,
+                    max_points_per_streamline,
+                    total_points_before,
+                    total_points_after,
+                    (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
+                )
+
+        return filtered
+
     def _extract_tract_name(self, tract_file: str | Path) -> str:
         """Extract tract name from file path (without extension).
 
@@ -1356,83 +1467,14 @@ class TractographyVisualizer:
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
-            # Subsample streamlines if requested (to avoid VTK segfaults)
-            original_count = len(tract_streamlines)
-            if max_streamlines is not None and len(tract_streamlines) > max_streamlines:
-                # Randomly subsample to max_streamlines
-                indices_array = np.random.choice(
-                    len(tract_streamlines),
-                    size=max_streamlines,
-                    replace=False,
-                )
-                indices = sorted(indices_array.tolist())  # Keep original order
-                tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
-                logger.info(
-                    "Subsampled streamlines from %d to %d (max_streamlines=%d)",
-                    original_count,
-                    len(tract_streamlines),
-                    max_streamlines,
-                )
-            elif subsample_factor is not None and 0 < subsample_factor < 1:
-                # Subsample by factor
-                n_keep = int(len(tract_streamlines) * subsample_factor)
-                if n_keep < len(tract_streamlines):
-                    indices_array = np.random.choice(
-                        len(tract_streamlines),
-                        size=n_keep,
-                        replace=False,
-                    )
-                    indices = sorted(indices_array.tolist())  # Keep original order
-                    tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
-                    logger.info(
-                        "Subsampled streamlines from %d to %d (factor=%.2f)",
-                        original_count,
-                        len(tract_streamlines),
-                        subsample_factor,
-                    )
-
-            # Resample streamlines to reduce points if requested
-            if resample_streamlines:
-                # Use approx_polygon_track to reduce points while preserving shape
-                resampled = Streamlines()
-                total_points_before = sum(len(sl) for sl in tract_streamlines)
-                for sl in tract_streamlines:
-                    resampled_sl = approx_polygon_track(sl, 0.25)
-                    resampled.append(resampled_sl)
-                tract_streamlines = resampled
-                total_points_after = sum(len(sl) for sl in tract_streamlines)
-                logger.info(
-                    "Resampled streamlines: %d total points -> %d total points (reduction: %.1f%%)",
-                    total_points_before,
-                    total_points_after,
-                    (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
-                )
-            elif max_points_per_streamline is not None:
-                # Resample only streamlines that exceed the limit
-                resampled = Streamlines()
-                total_points_before = sum(len(sl) for sl in tract_streamlines)
-                resampled_count = 0
-                for sl in tract_streamlines:
-                    if len(sl) > max_points_per_streamline:
-                        # Resample to max_points_per_streamline by evenly spacing points
-                        indices_array = np.linspace(0, len(sl) - 1, max_points_per_streamline, dtype=int)
-                        sl_array = np.array(sl)
-                        resampled_sl = sl_array[indices_array].tolist()
-                        resampled.append(resampled_sl)
-                        resampled_count += 1
-                    else:
-                        resampled.append(sl)
-                tract_streamlines = resampled
-                total_points_after = sum(len(sl) for sl in tract_streamlines)
-                if resampled_count > 0:
-                    logger.info(
-                        "Resampled %d streamlines exceeding %d points: %d total points -> %d total points (reduction: %.1f%%)",
-                        resampled_count,
-                        max_points_per_streamline,
-                        total_points_before,
-                        total_points_after,
-                        (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
-                    )
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            tract_streamlines = self._filter_streamlines(
+                tract_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
 
             # Calculate colors based on streamline directions using utility function
             streamline_colors = calculate_direction_colors(tract_streamlines)
@@ -1644,6 +1686,10 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         atlas_name: str | None = None,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Generate anatomical views for an atlas tract.
 
@@ -1786,6 +1832,15 @@ class TractographyVisualizer:
                 # Also update centroid after flip
                 all_points = np.vstack([np.array(sl) for sl in atlas_streamlines])
                 centroid = np.mean(all_points, axis=0)
+
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            atlas_streamlines = self._filter_streamlines(
+                atlas_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
 
             # Calculate colors based on streamline directions using utility function
             streamline_colors = calculate_direction_colors(atlas_streamlines)
@@ -2158,6 +2213,10 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         colormap: str = "Spectral",
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Plot AFQ profile with anatomical views.
 
@@ -2277,6 +2336,15 @@ class TractographyVisualizer:
             tract_streamlines = transform_streamlines(
                 tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            tract_streamlines = self._filter_streamlines(
+                tract_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
             )
 
             # Calculate AFQ profile colors for each streamline
@@ -2514,6 +2582,10 @@ class TractographyVisualizer:
         show_glass_brain: bool = True,
         subject_color: tuple[float, float, float] = (1.0, 0.0, 0.0),  # Red
         atlas_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Visualize shape similarity by overlaying subject and atlas tracts.
 
@@ -2649,6 +2721,22 @@ class TractographyVisualizer:
                     [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
                 )
 
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            subject_streamlines = self._filter_streamlines(
+                subject_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
+            atlas_streamlines = self._filter_streamlines(
+                atlas_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
+
             # Calculate combined centroid for rotation (from both tracts)
             # Calculate combined centroid using utility function
             centroid = calculate_combined_centroid(subject_streamlines, atlas_streamlines)
@@ -2747,6 +2835,10 @@ class TractographyVisualizer:
         show_glass_brain: bool = True,
         before_color: tuple[float, float, float] = (0.7, 0.7, 0.7),  # Light gray
         after_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Compare tract before and after CCI filtering.
 
@@ -2883,6 +2975,22 @@ class TractographyVisualizer:
             after_streamlines = transform_streamlines(
                 filtered_tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            before_streamlines = self._filter_streamlines(
+                before_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
+            after_streamlines = self._filter_streamlines(
+                after_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
             )
 
             # Calculate combined centroid for rotation (from both tracts)
@@ -3041,6 +3149,10 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         colormap: str = "random",
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Visualize bundle assignment map using DIPY's assignment_map.
 
@@ -3179,6 +3291,22 @@ class TractographyVisualizer:
             atlas_streamlines = transform_streamlines(
                 atlas_tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            tract_streamlines = self._filter_streamlines(
+                tract_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
+            atlas_streamlines = self._filter_streamlines(
+                atlas_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
             )
 
             # Calculate assignments on transformed streamlines (both in same space)
@@ -3343,6 +3471,10 @@ class TractographyVisualizer:
         *,
         ref_file: str | Path | None = None,  # Alias for ref_img
         output_dir: str | Path | None = None,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> Path:
         """Generate a GIF animation of rotating tractography.
 
@@ -3413,6 +3545,15 @@ class TractographyVisualizer:
             tract_streamlines = transform_streamlines(
                 tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            tract_streamlines = self._filter_streamlines(
+                tract_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
             )
 
             # Create initial actors
@@ -3588,6 +3729,10 @@ class TractographyVisualizer:
         ref_file: str | Path | None = None,  # Alias for ref_img
         output_dir: str | Path | None = None,
         remove_gifs: bool = True,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Generate MP4 videos from multiple tractography files.
 
@@ -3665,6 +3810,10 @@ class TractographyVisualizer:
                     tract_file=tract_path,
                     ref_img=ref_img,
                     output_dir=output_dir,
+                    max_streamlines=max_streamlines,
+                    subsample_factor=subsample_factor,
+                    max_points_per_streamline=max_points_per_streamline,
+                    resample_streamlines=resample_streamlines,
                 )
                 self.convert_gif_to_mp4(tract_gif, tract_mp4)
 
