@@ -746,6 +746,33 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
     ) -> None:
         """Initialize the TractographyVisualizer."""
+        # Initialize VTK for headless rendering BEFORE any VTK operations
+        # This is critical for cluster jobs that don't have a display
+        # Set environment variables before any VTK imports are used
+        if "DISPLAY" not in os.environ:
+            # No display available - force offscreen rendering
+            os.environ.setdefault("VTK_USE_OFFSCREEN", "1")
+            os.environ.setdefault("VTK_USE_OSMESA", "0")
+            logger.debug("No DISPLAY detected, enabling VTK offscreen rendering")
+        else:
+            # Display available, but still set offscreen as fallback
+            os.environ.setdefault("VTK_USE_OFFSCREEN", "1")
+            logger.debug("DISPLAY detected, but VTK offscreen rendering enabled as fallback")
+
+        # Additional VTK settings for stability
+        os.environ.setdefault("VTK_STREAM_READER", "1")
+        os.environ.setdefault("VTK_STREAM_WRITER", "1")
+
+        # Disable VTK warnings (can cause issues in some environments)
+        with contextlib.suppress(AttributeError, RuntimeError, ImportError):
+            vtk.vtkObject.GlobalWarningDisplayOff()
+            with contextlib.suppress(AttributeError, RuntimeError):
+                vtk.vtkOutputWindow.SetGlobalWarningDisplay(0)
+
+        # Set matplotlib to non-interactive backend for headless environments
+        with contextlib.suppress(ImportError, ValueError, RuntimeError):
+            plt.switch_backend("Agg")
+
         self._reference_image: Path | None = None
         self._output_directory: Path | None = None
         self.max_memory_mb: float | None = None
