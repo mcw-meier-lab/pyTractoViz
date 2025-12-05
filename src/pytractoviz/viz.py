@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD = 10000  # Streamlines with >10k points risk fragmentation
 DENSE_TRACT_POINT_THRESHOLD = 1000000  # >1M total points triggers dense tract warning
 VERY_LONG_STREAMLINE_POINT_THRESHOLD = 50000  # Streamlines with >50k points trigger warning
+LARGE_TRACT_POINT_THRESHOLD = 100000  # >100k total points triggers large tract info message
 
 
 def _log_memory_usage(
@@ -1184,6 +1185,8 @@ class TractographyVisualizer:
         output_dir: str | Path | None = None,
         figure_size: tuple[int, int] | None = None,
         show_glass_brain: bool = True,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
     ) -> dict[str, Path]:
         """Generate snapshots from standard anatomical views.
 
@@ -1207,6 +1210,13 @@ class TractographyVisualizer:
             set during initialization (default: (800, 800)). Default is None.
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
+        max_streamlines : int | None, optional
+            Maximum number of streamlines to render. If the tract has more
+            streamlines, they will be randomly subsampled. This can help avoid
+            VTK segfaults with very large tracts. Default is None (no limit).
+        subsample_factor : float | None, optional
+            Factor to subsample streamlines (0.0 to 1.0). If 0.5, keeps 50% of
+            streamlines. If None, no subsampling. Default is None.
 
         Returns
         -------
@@ -1304,6 +1314,41 @@ class TractographyVisualizer:
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
+            # Subsample streamlines if requested (to avoid VTK segfaults)
+            original_count = len(tract_streamlines)
+            if max_streamlines is not None and len(tract_streamlines) > max_streamlines:
+                # Randomly subsample to max_streamlines
+                indices_array = np.random.choice(
+                    len(tract_streamlines),
+                    size=max_streamlines,
+                    replace=False,
+                )
+                indices = sorted(indices_array.tolist())  # Keep original order
+                tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
+                logger.info(
+                    "Subsampled streamlines from %d to %d (max_streamlines=%d)",
+                    original_count,
+                    len(tract_streamlines),
+                    max_streamlines,
+                )
+            elif subsample_factor is not None and 0 < subsample_factor < 1:
+                # Subsample by factor
+                n_keep = int(len(tract_streamlines) * subsample_factor)
+                if n_keep < len(tract_streamlines):
+                    indices_array = np.random.choice(
+                        len(tract_streamlines),
+                        size=n_keep,
+                        replace=False,
+                    )
+                    indices = sorted(indices_array.tolist())  # Keep original order
+                    tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
+                    logger.info(
+                        "Subsampled streamlines from %d to %d (factor=%.2f)",
+                        original_count,
+                        len(tract_streamlines),
+                        subsample_factor,
+                    )
+
             # Calculate colors based on streamline directions using utility function
             streamline_colors = calculate_direction_colors(tract_streamlines)
 
@@ -1323,20 +1368,32 @@ class TractographyVisualizer:
                 max_points,
             )
 
-            # Warn if tract is very dense (high risk of std::bad_alloc)
+            # Warn if tract is very dense (high risk of std::bad_alloc or segfault)
             if total_points > DENSE_TRACT_POINT_THRESHOLD:
                 logger.warning(
                     "Very dense tract detected (%d total points). "
-                    "This may cause std::bad_alloc errors due to memory fragmentation. "
+                    "This may cause std::bad_alloc errors or segfaults due to memory fragmentation. "
                     "Consider: (1) resampling streamlines to reduce points, "
-                    "(2) filtering with higher cci_threshold, (3) reducing image resolution.",
+                    "(2) filtering with higher cci_threshold, (3) reducing image resolution, "
+                    "(4) disabling glass brain (show_glass_brain=False).",
                     total_points,
                 )
             if max_points > VERY_LONG_STREAMLINE_POINT_THRESHOLD:
                 logger.warning(
                     "Very long streamline detected (%d points). "
-                    "VTK may need large contiguous memory allocation which can fail due to fragmentation.",
+                    "VTK may need large contiguous memory allocation which can fail due to fragmentation. "
+                    "Consider disabling glass brain (show_glass_brain=False) or reducing figure_size.",
                     max_points,
+                )
+            # Warn if tract is moderately large and might cause issues
+            if total_points > LARGE_TRACT_POINT_THRESHOLD:
+                logger.info(
+                    "Large tract detected (%d total points). "
+                    "If you experience segfaults during rendering, try: "
+                    "(1) reducing figure_size to (400, 400) or smaller, "
+                    "(2) disabling glass brain (show_glass_brain=False), "
+                    "(3) filtering streamlines with higher cci_threshold.",
+                    total_points,
                 )
 
             # Clean up loaded objects that are no longer needed
@@ -1433,7 +1490,19 @@ class TractographyVisualizer:
                     continue
 
                 # Record the scene (this can also fail with std::bad_alloc or segfault)
+                # Force aggressive memory cleanup before recording to reduce fragmentation
                 logger.debug("Recording scene for view %s", view_name)
+                logger.debug(
+                    "Before recording: tract has %d streamlines, %d total points, image size=%dx%d",
+                    len(tract_streamlines),
+                    sum(len(sl) for sl in tract_streamlines),
+                    figure_size[0],
+                    figure_size[1],
+                )
+                # Aggressive cleanup before recording to reduce memory pressure
+                gc.collect()
+                gc.collect()  # Multiple passes for circular references
+
                 try:
                     window.record(
                         scene=scene,

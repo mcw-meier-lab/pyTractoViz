@@ -144,6 +144,7 @@ def test_api_matches_inventory(inventory: Inventory, public_objects: list[griffe
         "pytractoviz.viz.MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD",  # Internal constant for memory estimation
         "pytractoviz.viz.DENSE_TRACT_POINT_THRESHOLD",  # Internal constant for memory warnings
         "pytractoviz.viz.VERY_LONG_STREAMLINE_POINT_THRESHOLD",  # Internal constant for memory warnings
+        "pytractoviz.viz.LARGE_TRACT_POINT_THRESHOLD",  # Internal constant for memory warnings
     }
     not_in_inventory = [
         f"{obj.relative_filepath}:{obj.lineno}: {obj.path}"
