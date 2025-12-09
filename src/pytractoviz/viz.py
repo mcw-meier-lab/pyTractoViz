@@ -1476,6 +1476,14 @@ class TractographyVisualizer:
                 resample_streamlines=resample_streamlines,
             )
 
+            # Check if streamlines are empty after filtering
+            if not tract_streamlines or len(tract_streamlines) == 0:
+                logger.warning(
+                    "Tract has 0 streamlines after filtering. Skipping visualization for %s",
+                    tract_file,
+                )
+                return {}
+
             # Calculate colors based on streamline directions using utility function
             streamline_colors = calculate_direction_colors(tract_streamlines)
 
@@ -1840,6 +1848,12 @@ class TractographyVisualizer:
             if flip_lr:
                 # Flip X-axis (left-right) by negating X coordinates
                 # This is needed when MNI and native space have different L/R conventions
+                if not atlas_streamlines or len(atlas_streamlines) == 0:
+                    logger.warning(
+                        "Atlas tract has 0 streamlines before flip. Skipping visualization for %s",
+                        atlas_file,
+                    )
+                    return {}
                 atlas_streamlines = Streamlines(
                     [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
                 )
@@ -1856,6 +1870,14 @@ class TractographyVisualizer:
                 max_points_per_streamline=max_points_per_streamline,
                 resample_streamlines=resample_streamlines,
             )
+
+            # Check if streamlines are empty after filtering
+            if not atlas_streamlines or len(atlas_streamlines) == 0:
+                logger.warning(
+                    "Atlas tract has 0 streamlines after filtering. Skipping visualization for %s",
+                    atlas_file,
+                )
+                return {}
 
             # Calculate colors based on streamline directions using utility function
             streamline_colors = calculate_direction_colors(atlas_streamlines)
@@ -2077,6 +2099,13 @@ class TractographyVisualizer:
                 keep_tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
+
+            # Check if streamlines are empty
+            if not tract_streamlines or len(tract_streamlines) == 0:
+                logger.warning(
+                    "Tract has 0 streamlines after CCI filtering. Skipping visualization.",
+                )
+                return {}
 
             # Validate CCI array matches tract (critical for memory safety)
             if len(cci) != len(tract_streamlines):
@@ -2372,6 +2401,14 @@ class TractographyVisualizer:
                 max_points_per_streamline=max_points_per_streamline,
                 resample_streamlines=resample_streamlines,
             )
+
+            # Check if streamlines are empty after filtering
+            if not tract_streamlines or len(tract_streamlines) == 0:
+                logger.warning(
+                    "Tract has 0 streamlines after filtering. Skipping visualization for %s",
+                    tract_file,
+                )
+                return {}
 
             # Calculate AFQ profile colors for each streamline
             # Store per-point colors for each streamline
@@ -2771,6 +2808,25 @@ class TractographyVisualizer:
                 max_points_per_streamline=max_points_per_streamline,
                 resample_streamlines=resample_streamlines,
             )
+
+            # Check if streamlines are empty after filtering
+            if (not subject_streamlines or len(subject_streamlines) == 0) and (
+                not atlas_streamlines or len(atlas_streamlines) == 0
+            ):
+                logger.warning(
+                    "Both subject and atlas tracts have 0 streamlines after filtering. Skipping visualization.",
+                )
+                return {}
+            if not subject_streamlines or len(subject_streamlines) == 0:
+                logger.warning(
+                    "Subject tract has 0 streamlines after filtering. Skipping visualization.",
+                )
+                return {}
+            if not atlas_streamlines or len(atlas_streamlines) == 0:
+                logger.warning(
+                    "Atlas tract has 0 streamlines after filtering. Skipping visualization.",
+                )
+                return {}
 
             # Calculate combined centroid for rotation (from both tracts)
             # Calculate combined centroid using utility function

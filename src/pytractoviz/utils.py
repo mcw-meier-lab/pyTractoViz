@@ -30,7 +30,13 @@ def calculate_centroid(streamlines: Streamlines) -> np.ndarray:
     -------
     np.ndarray
         The centroid coordinates (3D).
+
+    Raises
+    ------
+    ValueError
+        If streamlines is empty (raises numpy's concatenation error).
     """
+    # Let numpy raise the original error if empty - this matches test expectations
     all_points = np.vstack([np.array(sl) for sl in streamlines])
     return np.mean(all_points, axis=0)
 
@@ -47,7 +53,13 @@ def calculate_bbox_size(streamlines: Streamlines) -> np.ndarray:
     -------
     np.ndarray
         The bounding box size (3D).
+
+    Raises
+    ------
+    ValueError
+        If streamlines is empty (raises numpy's concatenation error).
     """
+    # Let numpy raise the original error if empty - this matches test expectations
     all_points = np.vstack([np.array(sl) for sl in streamlines])
     return np.max(all_points, axis=0) - np.min(all_points, axis=0)
 
@@ -69,7 +81,11 @@ def calculate_direction_colors(streamlines: Streamlines) -> np.ndarray:
     -------
     np.ndarray
         Array of RGB colors, one per streamline (N x 3).
+        Returns empty array (0, 3) if streamlines is empty.
     """
+    # Return empty array if streamlines is empty (matches test expectations)
+    if not streamlines or len(streamlines) == 0:
+        return np.array([]).reshape(0, 3)
     streamline_colors = []
     max_range = 1e-10
     sl_len = 2
@@ -126,7 +142,13 @@ def calculate_combined_centroid(*streamlines_groups: Streamlines) -> np.ndarray:
     -------
     np.ndarray
         The combined centroid coordinates (3D).
+
+    Raises
+    ------
+    ValueError
+        If any streamlines group is empty (raises numpy's concatenation error).
     """
+    # Let numpy raise the original error if any group is empty - this matches test expectations
     all_points_list = []
     for streamlines in streamlines_groups:
         all_points_list.append(np.vstack([np.array(sl) for sl in streamlines]))
@@ -146,7 +168,13 @@ def calculate_combined_bbox_size(*streamlines_groups: Streamlines) -> np.ndarray
     -------
     np.ndarray
         The combined bounding box size (3D).
+
+    Raises
+    ------
+    ValueError
+        If any streamlines group is empty (raises numpy's concatenation error).
     """
+    # Let numpy raise the original error if any group is empty - this matches test expectations
     all_points_list = []
     for streamlines in streamlines_groups:
         all_points_list.append(np.vstack([np.array(sl) for sl in streamlines]))
