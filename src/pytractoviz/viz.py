@@ -986,17 +986,37 @@ class TractographyVisualizer:
         -------
         actor.Actor
             The streamline actor.
+
+        Raises
+        ------
+        RuntimeError
+            If VTK memory allocation fails (std::bad_alloc). The error message will
+            contain information about the memory failure.
         """
-        if colors is not None:
-            if len(colors) == len(streamlines):
-                return actor.line(streamlines, colors=colors)
-            # Handle length mismatch
-            if len(colors) < len(streamlines):
-                repeat_factor = len(streamlines) // len(colors) + 1
-                extended_colors = np.tile(colors, (repeat_factor, 1))[: len(streamlines)]
-                return actor.line(streamlines, colors=extended_colors)
-            return actor.line(streamlines, colors=colors[: len(streamlines)])
-        return actor.line(streamlines)
+        try:
+            if colors is not None:
+                if len(colors) == len(streamlines):
+                    return actor.line(streamlines, colors=colors)
+                # Handle length mismatch
+                if len(colors) < len(streamlines):
+                    repeat_factor = len(streamlines) // len(colors) + 1
+                    extended_colors = np.tile(colors, (repeat_factor, 1))[: len(streamlines)]
+                    return actor.line(streamlines, colors=extended_colors)
+                return actor.line(streamlines, colors=colors[: len(streamlines)])
+            return actor.line(streamlines)
+        except RuntimeError as e:
+            # Catch std::bad_alloc and other VTK memory errors
+            error_msg = str(e).lower()
+            if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                total_points = sum(len(sl) for sl in streamlines)
+                logger.exception(
+                    "VTK memory allocation failed in _create_streamline_actor (likely std::bad_alloc). "
+                    "Tract has %d streamlines with %d total points. "
+                    "Try filtering streamlines, reducing image resolution, or using n_jobs=1.",
+                    len(streamlines),
+                    total_points,
+                )
+            raise
 
     def _filter_streamlines(
         self,
@@ -1174,7 +1194,23 @@ class TractographyVisualizer:
                 f"Failed to load tract from {tract_file}: {e}",
             ) from e
         else:
-            return actor.line(tract_to_ref)
+            try:
+                return actor.line(tract_to_ref)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    total_points = sum(len(sl) for sl in tract_to_ref)
+                    logger.exception(
+                        "VTK memory allocation failed in load_tract (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try filtering streamlines or using n_jobs=1.",
+                        len(tract_to_ref),
+                        total_points,
+                    )
+                raise TractographyVisualizationError(
+                    f"Failed to create actor from tract: {e}. Try filtering streamlines or processing with n_jobs=1.",
+                ) from e
 
     def weighted_afq(
         self,
@@ -1897,8 +1933,28 @@ class TractographyVisualizer:
                 scene, _ = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
 
                 # Create actor with original streamlines using helper method
-                tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
-                scene.add(tract_actor)
+                try:
+                    tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
+                    scene.add(tract_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in atlas_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for atlas comparison view %s (likely std::bad_alloc). "
+                            "Atlas has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(atlas_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
 
                 # Set camera position for anatomical view using utility function
                 bbox_size = calculate_bbox_size(atlas_streamlines)
@@ -2444,8 +2500,21 @@ class TractographyVisualizer:
                 for _i, (sl, point_colors) in enumerate(
                     zip(tract_streamlines, streamline_point_colors),
                 ):
-                    line_actor = actor.line([sl], colors=point_colors)
-                    scene.add(line_actor)
+                    try:
+                        line_actor = actor.line([sl], colors=point_colors)
+                        scene.add(line_actor)
+                    except RuntimeError as e:
+                        # Catch std::bad_alloc and other VTK errors
+                        error_msg = str(e).lower()
+                        if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                            logger.warning(
+                                "VTK memory allocation failed for AFQ profile streamline %d/%d (likely std::bad_alloc). "
+                                "Skipping this streamline. Try reducing image resolution or filtering streamlines.",
+                                _i + 1,
+                                len(tract_streamlines),
+                            )
+                            continue
+                        raise
 
                 # Set camera position for anatomical view using utility function
                 bbox_size = calculate_bbox_size(tract_streamlines)
@@ -2846,14 +2915,58 @@ class TractographyVisualizer:
                 # Add subject tract with subject color (single color for all streamlines)
                 # Use original streamlines - camera handles view
                 subject_colors = np.tile(subject_color, (len(subject_streamlines), 1))
-                subject_actor = actor.line(subject_streamlines, colors=subject_colors)
-                scene.add(subject_actor)
+                try:
+                    subject_actor = actor.line(subject_streamlines, colors=subject_colors)
+                    scene.add(subject_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in subject_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for shape similarity subject actor (likely std::bad_alloc). "
+                            "Subject has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            len(subject_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        if brain_actor is not None:
+                            del brain_actor
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
 
                 # Add atlas tract with atlas color (single color for all streamlines)
                 # Use original streamlines - camera handles view
                 atlas_colors = np.tile(atlas_color, (len(atlas_streamlines), 1))
-                atlas_actor = actor.line(atlas_streamlines, colors=atlas_colors)
-                scene.add(atlas_actor)
+                try:
+                    atlas_actor = actor.line(atlas_streamlines, colors=atlas_colors)
+                    scene.add(atlas_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in atlas_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for shape similarity atlas actor (likely std::bad_alloc). "
+                            "Atlas has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            len(atlas_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        if subject_actor is not None:
+                            del subject_actor
+                        if brain_actor is not None:
+                            del brain_actor
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
 
                 # Set camera position for anatomical view
                 # Use combined bbox of both tracts for camera distance
@@ -3111,8 +3224,29 @@ class TractographyVisualizer:
 
                 # Add before tract (use original streamlines - camera handles view)
                 before_colors = np.tile(before_color, (len(before_streamlines), 1))
-                before_actor = actor.line(before_streamlines, colors=before_colors)
-                scene_before.add(before_actor)
+                try:
+                    before_actor = actor.line(before_streamlines, colors=before_colors)
+                    scene_before.add(before_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in before_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for before CCI actor (likely std::bad_alloc). "
+                            "Before has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            len(before_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene_before.clear()
+                        del scene_before
+                        if brain_actor_before is not None:
+                            del brain_actor_before
+                        gc.collect()
+                        continue
+                    raise
 
                 # Set camera for before scene using utility function
                 bbox_size_before = calculate_bbox_size(before_streamlines)
@@ -3128,8 +3262,34 @@ class TractographyVisualizer:
 
                 # Add after tract (use original streamlines - camera handles view)
                 after_colors = np.tile(after_color, (len(after_streamlines), 1))
-                after_actor = actor.line(after_streamlines, colors=after_colors)
-                scene_after.add(after_actor)
+                try:
+                    after_actor = actor.line(after_streamlines, colors=after_colors)
+                    scene_after.add(after_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in after_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for after CCI actor (likely std::bad_alloc). "
+                            "After has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            len(after_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene_before.clear()
+                        scene_after.clear()
+                        if before_actor is not None:
+                            del before_actor
+                        if brain_actor_before is not None:
+                            del brain_actor_before
+                        if brain_actor_after is not None:
+                            del brain_actor_after
+                        del scene_before, scene_after
+                        gc.collect()
+                        continue
+                    raise
 
                 # Set camera for after scene using utility function
                 bbox_size_after = calculate_bbox_size(after_streamlines)
@@ -3507,8 +3667,30 @@ class TractographyVisualizer:
                     raise _create_shape_error(msg)
 
                 # Use original streamlines with original colors - no rotation needed
-                tract_actor = actor.line(tract_streamlines, colors=point_colors_array, fake_tube=True, linewidth=6)
-                scene.add(tract_actor)
+                try:
+                    tract_actor = actor.line(tract_streamlines, colors=point_colors_array, fake_tube=True, linewidth=6)
+                    scene.add(tract_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in tract_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for bundle assignment view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(tract_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        if brain_actor is not None:
+                            del brain_actor
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
 
                 # Set camera position for anatomical view (no streamline rotation needed)
                 # Calculate bbox for camera distance using utility function
@@ -3666,8 +3848,26 @@ class TractographyVisualizer:
                 resample_streamlines=resample_streamlines,
             )
 
-            # Create initial actors
-            tract_actor = actor.line(tract_streamlines)
+            # Create initial actors with error handling for std::bad_alloc
+            try:
+                tract_actor = actor.line(tract_streamlines)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    total_points = sum(len(sl) for sl in tract_streamlines)
+                    logger.exception(
+                        "VTK memory allocation failed when creating initial actor for GIF (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try filtering streamlines, reducing gif_size, or using n_jobs=1.",
+                        len(tract_streamlines),
+                        total_points,
+                    )
+                    raise TractographyVisualizationError(
+                        f"Failed to create actor for GIF: {e}. "
+                        "Try reducing tract size, gif_size, or processing with n_jobs=1.",
+                    ) from e
+                raise
             brain_actor = self.get_glass_brain(ref_img)
             scene = window.Scene()
             scene.add(brain_actor)
@@ -3688,7 +3888,23 @@ class TractographyVisualizer:
                 rotated_streamlines = [
                     np.dot(s - rotation_center, rot_matrix.T) + rotation_center for s in tract_streamlines
                 ]
-                stream_actor = actor.line(rotated_streamlines)
+                # Create actor for rotated streamlines with error handling
+                try:
+                    stream_actor = actor.line(rotated_streamlines)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.warning(
+                            "VTK memory allocation failed when creating rotated actor for GIF frame at angle %.1f° (likely std::bad_alloc). "
+                            "Skipping this frame. Try filtering streamlines, reducing gif_size, or using n_jobs=1.",
+                            angle,
+                        )
+                        # Clean up and skip this frame
+                        del rotated_streamlines
+                        gc.collect()
+                        continue
+                    raise
 
                 # Convert to 4x4 transformation matrix
                 transform_matrix = np.eye(4)
