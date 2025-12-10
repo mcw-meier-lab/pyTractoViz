@@ -64,6 +64,7 @@ MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD = 10000  # Streamlines with >1
 DENSE_TRACT_POINT_THRESHOLD = 1000000  # >1M total points triggers dense tract warning
 VERY_LONG_STREAMLINE_POINT_THRESHOLD = 50000  # Streamlines with >50k points trigger warning
 LARGE_TRACT_POINT_THRESHOLD = 100000  # >100k total points triggers large tract info message
+MIN_MEMORY_CHECK_MB = 100  # Minimum estimated memory (MB) before checking availability
 
 
 def _log_memory_usage(
@@ -993,6 +994,32 @@ class TractographyVisualizer:
             If VTK memory allocation fails (std::bad_alloc). The error message will
             contain information about the memory failure.
         """
+        # Pre-emptive memory check to avoid C++ std::bad_alloc that might bypass Python exception handling
+        # Estimate memory needed (conservative estimate for actor creation)
+        total_points = sum(len(sl) for sl in streamlines)
+        num_streamlines = len(streamlines)
+
+        # Conservative estimate: ~500 bytes per point for VTK actor (coordinates, colors, normals, etc.)
+        # Plus overhead for VTK internal structures
+        estimated_memory_mb = (total_points * 500) / (1024**2) * 1.5  # 1.5x safety factor
+
+        # Check if we have enough memory before attempting allocation
+        # This prevents C++ std::bad_alloc that might terminate the process
+        if (
+            psutil is not None
+            and estimated_memory_mb > MIN_MEMORY_CHECK_MB
+            and not _check_memory_available(estimated_memory_mb, safety_margin=0.5)
+        ):
+            total_points = sum(len(sl) for sl in streamlines)
+            error_msg = (
+                f"Insufficient memory to create actor. "
+                f"Tract has {num_streamlines} streamlines with {total_points} total points. "
+                f"Estimated memory needed: {estimated_memory_mb:.1f} MB. "
+                f"Try filtering streamlines, reducing image resolution, or using n_jobs=1."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
         try:
             if colors is not None:
                 if len(colors) == len(streamlines):
@@ -1246,6 +1273,19 @@ class TractographyVisualizer:
         try:
             atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+
+            # Check if tract is empty before processing
+            if not tract.streamlines or len(tract.streamlines) == 0:
+                raise InvalidInputError(
+                    f"Tract file {tract_file} is empty (0 streamlines). Cannot calculate AFQ profile.",
+                )
+
+            # Check if atlas tract is empty
+            if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+                raise InvalidInputError(
+                    f"Atlas tract file {atlas_file} is empty (0 streamlines). Cannot calculate AFQ profile.",
+                )
+
             metric_img = nib.load(str(metric_file))
             metric = metric_img.get_fdata()  # type: ignore[attr-defined]
 
@@ -2376,8 +2416,19 @@ class TractographyVisualizer:
         TractographyVisualizationError
             If image generation fails.
         """
-        # Calculate AFQ profile
-        profile = self.weighted_afq(tract_file, atlas_file, metric_file)
+        # Calculate AFQ profile (this will raise InvalidInputError if tract is empty)
+        try:
+            profile = self.weighted_afq(tract_file, atlas_file, metric_file)
+        except InvalidInputError as e:
+            # If tract is empty, return empty dict instead of raising
+            if "empty" in str(e).lower() or "0 streamlines" in str(e).lower():
+                logger.warning(
+                    "Skipping AFQ profile for %s: %s",
+                    tract_file,
+                    e,
+                )
+                return {}
+            raise
 
         # Use standard anatomical view angles from utils
         view_angles = ANATOMICAL_VIEW_ANGLES
@@ -2440,8 +2491,17 @@ class TractographyVisualizer:
             return generated_views
 
         try:
-            # Load tract only if we need to generate at least one view or profile plot
+            # Load tract first to check if it's empty before calculating AFQ profile
             tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+
+            # Check if tract is empty before any processing
+            if not tract.streamlines or len(tract.streamlines) == 0:
+                logger.warning(
+                    "Tract has 0 streamlines. Skipping AFQ profile calculation and visualization for %s",
+                    tract_file,
+                )
+                return {}
+
             tract.to_rasmm()
             ref_img_obj = nib.load(str(ref_img))
             tract_streamlines = transform_streamlines(
@@ -4202,13 +4262,43 @@ class TractographyVisualizer:
                     # Add anatomical views to results
                     for view_name, view_path in anatomical_views.items():
                         tract_results[f"anatomical_{view_name}"] = view_path
-                except (OSError, ValueError, RuntimeError) as e:
-                    logger.warning(
-                        "Failed to generate anatomical views for %s/%s: %s",
-                        subject_id,
-                        tract_name,
-                        e,
-                    )
+                except (OSError, ValueError, RuntimeError, MemoryError, SystemExit, KeyboardInterrupt) as e:
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "Memory allocation failed (likely std::bad_alloc) when generating anatomical views for %s/%s. "
+                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                            subject_id,
+                            tract_name,
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to generate anatomical views for %s/%s: %s",
+                            subject_id,
+                            tract_name,
+                            e,
+                        )
+                except Exception as e:
+                    # Catch-all for any other exceptions (including C++ exceptions that might not be properly caught)
+                    error_msg = str(e).lower()
+                    if (
+                        "bad_alloc" in error_msg
+                        or "memory" in error_msg
+                        or "allocation" in error_msg
+                        or "terminate" in error_msg
+                    ):
+                        logger.exception(
+                            "Memory allocation failed (likely std::bad_alloc) when generating anatomical views for %s/%s. "
+                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                            subject_id,
+                            tract_name,
+                        )
+                    else:
+                        logger.exception(
+                            "Unexpected error generating anatomical views for %s/%s",
+                            subject_id,
+                            tract_name,
+                        )
 
             # 2. CCI calculation and visualization
             if "cci" not in skip_checks:
@@ -4222,13 +4312,42 @@ class TractographyVisualizer:
                     # Add CCI plots to results
                     for plot_type, plot_path in cci_plots.items():
                         tract_results[f"cci_{plot_type}"] = plot_path
-                except (OSError, ValueError, RuntimeError) as e:
-                    logger.warning(
-                        "Failed to generate CCI plots for %s/%s: %s",
-                        subject_id,
-                        tract_name,
-                        e,
-                    )
+                except (OSError, ValueError, RuntimeError, MemoryError) as e:
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "Memory allocation failed (likely std::bad_alloc) when generating CCI plots for %s/%s. "
+                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                            subject_id,
+                            tract_name,
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to generate CCI plots for %s/%s: %s",
+                            subject_id,
+                            tract_name,
+                            e,
+                        )
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if (
+                        "bad_alloc" in error_msg
+                        or "memory" in error_msg
+                        or "allocation" in error_msg
+                        or "terminate" in error_msg
+                    ):
+                        logger.exception(
+                            "Memory allocation failed (likely std::bad_alloc) when generating CCI plots for %s/%s. "
+                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                            subject_id,
+                            tract_name,
+                        )
+                    else:
+                        logger.exception(
+                            "Unexpected error generating CCI plots for %s/%s",
+                            subject_id,
+                            tract_name,
+                        )
 
             # 3. Before/after CCI comparison
             if "before_after_cci" not in skip_checks:
@@ -4242,13 +4361,42 @@ class TractographyVisualizer:
                     # Add before/after views to results
                     for view_name, view_path in before_after_views.items():
                         tract_results[f"before_after_cci_{view_name}"] = view_path
-                except (OSError, ValueError, RuntimeError) as e:
-                    logger.warning(
-                        "Failed to generate before/after CCI comparison for %s/%s: %s",
-                        subject_id,
-                        tract_name,
-                        e,
-                    )
+                except (OSError, ValueError, RuntimeError, MemoryError) as e:
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "Memory allocation failed (likely std::bad_alloc) when generating before/after CCI comparison for %s/%s. "
+                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                            subject_id,
+                            tract_name,
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to generate before/after CCI comparison for %s/%s: %s",
+                            subject_id,
+                            tract_name,
+                            e,
+                        )
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if (
+                        "bad_alloc" in error_msg
+                        or "memory" in error_msg
+                        or "allocation" in error_msg
+                        or "terminate" in error_msg
+                    ):
+                        logger.exception(
+                            "Memory allocation failed (likely std::bad_alloc) when generating before/after CCI comparison for %s/%s. "
+                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                            subject_id,
+                            tract_name,
+                        )
+                    else:
+                        logger.exception(
+                            "Unexpected error generating before/after CCI comparison for %s/%s",
+                            subject_id,
+                            tract_name,
+                        )
 
             # 4. Atlas comparison (uses MNI space tracts for subject views)
             if "atlas_comparison" not in skip_checks and atlas_files is not None and tract_name in atlas_files:
@@ -4349,17 +4497,29 @@ class TractographyVisualizer:
                             output_dir=tract_output_dir,
                             **subject_merged_kwargs,
                         )
-                        # Add AFQ plots to results
-                        for plot_type, plot_path in afq_plots.items():
-                            tract_results[f"afq_{metric_name}_{plot_type}"] = plot_path
-                    except (OSError, ValueError, RuntimeError, IndexError) as e:
-                        logger.warning(
-                            "Failed to generate AFQ profile for %s/%s/%s: %s",
-                            subject_id,
-                            tract_name,
-                            metric_name,
-                            e,
-                        )
+                        # Add AFQ plots to results (skip if empty dict returned for empty tracts)
+                        if afq_plots:
+                            for plot_type, plot_path in afq_plots.items():
+                                tract_results[f"afq_{metric_name}_{plot_type}"] = plot_path
+                    except (OSError, ValueError, RuntimeError, IndexError, InvalidInputError) as e:
+                        # InvalidInputError is raised for empty tracts
+                        if isinstance(e, InvalidInputError) and (
+                            "empty" in str(e).lower() or "0 streamlines" in str(e).lower()
+                        ):
+                            logger.warning(
+                                "Skipping AFQ profile for %s/%s/%s: tract is empty",
+                                subject_id,
+                                tract_name,
+                                metric_name,
+                            )
+                        else:
+                            logger.warning(
+                                "Failed to generate AFQ profile for %s/%s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                metric_name,
+                                e,
+                            )
 
             # 7. Bundle assignment (uses MNI space tracts and atlas files as model files)
             if (
@@ -4391,8 +4551,44 @@ class TractographyVisualizer:
                         e,
                     )
 
-        except (OSError, ValueError, RuntimeError):
-            logger.exception("Error processing %s/%s", subject_id, tract_name)
+        except (OSError, ValueError, RuntimeError, MemoryError, SystemExit, KeyboardInterrupt) as e:
+            error_msg = str(e).lower()
+            if (
+                "bad_alloc" in error_msg
+                or "memory" in error_msg
+                or "allocation" in error_msg
+                or "terminate" in error_msg
+            ):
+                logger.exception(
+                    "Memory allocation failed (likely std::bad_alloc) when processing %s/%s. "
+                    "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                    subject_id,
+                    tract_name,
+                )
+            else:
+                logger.exception("Error processing %s/%s", subject_id, tract_name)
+        except Exception as e:
+            # Catch-all for any other exceptions (including C++ exceptions that might not be properly caught)
+            error_msg = str(e).lower()
+            if (
+                "bad_alloc" in error_msg
+                or "memory" in error_msg
+                or "allocation" in error_msg
+                or "terminate" in error_msg
+            ):
+                logger.exception(
+                    "Memory allocation failed (likely std::bad_alloc) when processing %s/%s. "
+                    "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
+                    subject_id,
+                    tract_name,
+                )
+            else:
+                logger.exception(
+                    "Unexpected error processing %s/%s (type: %s)",
+                    subject_id,
+                    tract_name,
+                    type(e).__name__,
+                )
         finally:
             # Clean up memory after processing this tract
             gc.collect()
