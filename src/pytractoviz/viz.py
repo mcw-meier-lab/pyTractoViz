@@ -1408,6 +1408,7 @@ class TractographyVisualizer:
         subsample_factor: float | None = None,
         max_points_per_streamline: int | None = None,
         resample_streamlines: bool = False,
+        flip_lr: bool = False,
     ) -> dict[str, Path]:
         """Generate snapshots from standard anatomical views.
 
@@ -1446,6 +1447,11 @@ class TractographyVisualizer:
             If True, resample all streamlines using approx_polygon_track with
             distance=0.25 to reduce point count. This is a more aggressive
             resampling that reduces points while preserving shape. Default is False.
+        flip_lr : bool, optional
+            Whether to flip left-right (X-axis) when transforming tract.
+            This may be needed for some coordinate conventions or file formats
+            where the left-right orientation differs (e.g., when working with
+            MNI space). Default is False.
 
         Returns
         -------
@@ -1542,6 +1548,20 @@ class TractographyVisualizer:
                 tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
+
+            # Apply left-right flip if needed (common when tract is in MNI space)
+            if flip_lr:
+                # Flip X-axis (left-right) by negating X coordinates
+                # This is needed when MNI and native space have different L/R conventions
+                if not tract_streamlines or len(tract_streamlines) == 0:
+                    logger.warning(
+                        "Tract has 0 streamlines before flip. Skipping visualization for %s",
+                        tract_file,
+                    )
+                    return {}
+                tract_streamlines = Streamlines(
+                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in tract_streamlines],
+                )
 
             # Filter streamlines if requested (to avoid VTK segfaults)
             tract_streamlines = self._filter_streamlines(
@@ -4437,6 +4457,7 @@ class TractographyVisualizer:
                     ):
                         tract_file_mni = subjects_mni_space[subject_id][tract_name]
                         # Generate subject views in MNI space
+                        # Note: Don't apply flip_lr here - MNI views should match original anatomical views
                         subject_mni_views = self.generate_anatomical_views(
                             tract_file_mni,
                             ref_img=atlas_ref_img,  # Use atlas ref image for MNI space
@@ -4448,10 +4469,11 @@ class TractographyVisualizer:
                             tract_results[f"subject_mni_{view_name}"] = view_path
 
                     # Generate atlas views
+                    # Note: Don't apply flip_lr here - atlas views should match MNI views
                     atlas_views = self.generate_atlas_views(
                         atlas_file,
                         atlas_ref_img=atlas_ref_img,
-                        flip_lr=flip_lr,
+                        flip_lr=False,  # Set to False to match MNI views
                         output_dir=tract_output_dir,
                         **atlas_merged_kwargs,  # Atlas files use atlas_kwargs
                     )
