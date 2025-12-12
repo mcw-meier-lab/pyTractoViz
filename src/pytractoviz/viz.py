@@ -3640,6 +3640,15 @@ class TractographyVisualizer:
             # Assignments are in the order points appear when iterating through streamlines sequentially
             assignment_indices = assignment_map(tract_streamlines, atlas_streamlines, n_segments)
             assignment_indices = np.array(assignment_indices)
+            
+            # Validate that the number of assignments matches the number of points
+            total_points = sum(len(sl) for sl in tract_streamlines)
+            if len(assignment_indices) != total_points:
+                raise ValueError(
+                    f"Mismatch between number of assignments ({len(assignment_indices)}) "
+                    f"and number of points ({total_points}). This may indicate an issue "
+                    "with streamline filtering or assignment_map."
+                )
 
             # Generate colors for each segment
             # Use random colors like DIPY example (produces wide spectrum of distinct colors)
@@ -3672,16 +3681,34 @@ class TractographyVisualizer:
             # This creates the banding effect as points along a streamline are assigned to different segments
             # IMPORTANT: assignment_indices are in the order points appear when iterating through
             # streamlines sequentially (streamline 0 all points, then streamline 1 all points, etc.)
+            # Construct colors by explicitly iterating through streamlines to ensure order matches actor.line()
             point_colors = []
-            for i in range(len(assignment_indices)):
-                # Get the color for this point's assigned segment
-                seg_idx = assignment_indices[i]
-                # Ensure index is within bounds
-                if seg_idx < 0 or seg_idx >= len(segment_colors):
-                    # Fallback to first color if index is out of bounds
-                    point_colors.append(segment_colors[0])
-                else:
-                    point_colors.append(tuple(segment_colors[seg_idx]))
+            assignment_idx = 0
+            for sl in tract_streamlines:
+                for _ in range(len(sl)):
+                    # Ensure we don't go out of bounds
+                    if assignment_idx >= len(assignment_indices):
+                        raise ValueError(
+                            f"Assignment index {assignment_idx} exceeds number of assignments "
+                            f"({len(assignment_indices)}). This indicates a mismatch between "
+                            "streamlines and assignments."
+                        )
+                    # Get the color for this point's assigned segment
+                    seg_idx = assignment_indices[assignment_idx]
+                    # Ensure index is within bounds
+                    if seg_idx < 0 or seg_idx >= len(segment_colors):
+                        # Fallback to first color if index is out of bounds
+                        point_colors.append(segment_colors[0])
+                    else:
+                        point_colors.append(tuple(segment_colors[seg_idx]))
+                    assignment_idx += 1
+            
+            # Final validation: ensure we processed all assignments
+            if assignment_idx != len(assignment_indices):
+                raise ValueError(
+                    f"Processed {assignment_idx} points but have {len(assignment_indices)} assignments. "
+                    "This indicates a mismatch between streamlines and assignments."
+                )
 
             # Debug: Show sample of assignments and colors for first streamline (after point_colors is created)
             point_idx = 0
