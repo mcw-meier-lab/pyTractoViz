@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import json
 import logging
 import multiprocessing
 import os
@@ -4290,11 +4291,28 @@ class TractographyVisualizer:
         Returns a dictionary of results for this tract.
         """
         tract_results: dict[str, str | Path] = {}
+        # Track metrics and errors for summary table
+        metrics: dict[str, Any] = {}
+        errors: list[str] = []
+        missing_data: list[str] = []
 
         # Merge kwargs: subject_kwargs override general kwargs for subject methods
         subject_merged_kwargs = {**kwargs, **(subject_kwargs or {})}
         # Merge kwargs: atlas_kwargs override general kwargs for atlas methods
         atlas_merged_kwargs = {**kwargs, **(atlas_kwargs or {})}
+
+        # Load tract to get initial metrics
+        try:
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+            initial_streamline_count = len(tract.streamlines) if tract.streamlines else 0
+            metrics["initial_streamline_count"] = initial_streamline_count
+            del tract
+            gc.collect()
+        except Exception as e:
+            logger.warning("Failed to load tract for metrics: %s", e)
+            metrics["initial_streamline_count"] = None
+            errors.append(f"Failed to load tract: {str(e)}")
 
         try:
             # 1. Standard anatomical views
@@ -4319,12 +4337,14 @@ class TractographyVisualizer:
                             tract_name,
                         )
                     else:
+                        error_msg_short = str(e)[:100]
                         logger.warning(
                             "Failed to generate anatomical views for %s/%s: %s",
                             subject_id,
                             tract_name,
                             e,
                         )
+                        errors.append(f"Anatomical views: {error_msg_short}")
                 except Exception as e:
                     # Catch-all for any other exceptions (including C++ exceptions that might not be properly caught)
                     error_msg = str(e).lower()
@@ -4341,15 +4361,38 @@ class TractographyVisualizer:
                             tract_name,
                         )
                     else:
+                        error_msg_short = str(e)[:100]
                         logger.exception(
                             "Unexpected error generating anatomical views for %s/%s",
                             subject_id,
                             tract_name,
                         )
+                        errors.append(f"Anatomical views: {error_msg_short}")
 
             # 2. CCI calculation and visualization
             if "cci" not in skip_checks:
                 try:
+                    # Calculate CCI to get metrics
+                    try:
+                        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+                        tract.to_rasmm()
+                        cci_values, keep_tract = self.calc_cci(tract, ref_img=subject_ref_img)
+                        if len(cci_values) > 0:
+                            metrics["cci_mean"] = float(np.mean(cci_values))
+                            metrics["cci_median"] = float(np.median(cci_values))
+                            metrics["cci_min"] = float(np.min(cci_values))
+                            metrics["cci_max"] = float(np.max(cci_values))
+                            metrics["cci_after_filter_count"] = len(cci_values)
+                            metrics["cci_removed_count"] = metrics.get("initial_streamline_count", 0) - len(cci_values) if metrics.get("initial_streamline_count") is not None else None
+                        else:
+                            metrics["cci_after_filter_count"] = 0
+                            missing_data.append("CCI: No streamlines after filtering")
+                        del tract, cci_values, keep_tract
+                        gc.collect()
+                    except Exception as e:
+                        logger.warning("Failed to calculate CCI metrics: %s", e)
+                        errors.append(f"CCI metrics calculation failed: {str(e)}")
+
                     cci_plots = self.plot_cci(
                         tract_file,  # type: ignore[arg-type]
                         output_dir=tract_output_dir,
@@ -4369,14 +4412,17 @@ class TractographyVisualizer:
                             tract_name,
                         )
                     else:
+                        error_msg_short = str(e)[:100]  # Truncate long error messages
                         logger.warning(
                             "Failed to generate CCI plots for %s/%s: %s",
                             subject_id,
                             tract_name,
                             e,
                         )
+                        errors.append(f"CCI visualization: {error_msg_short}")
                 except Exception as e:
                     error_msg = str(e).lower()
+                    error_msg_short = str(e)[:100]
                     if (
                         "bad_alloc" in error_msg
                         or "memory" in error_msg
@@ -4389,12 +4435,14 @@ class TractographyVisualizer:
                             subject_id,
                             tract_name,
                         )
+                        errors.append(f"CCI visualization: Memory error ({error_msg_short})")
                     else:
                         logger.exception(
                             "Unexpected error generating CCI plots for %s/%s",
                             subject_id,
                             tract_name,
                         )
+                        errors.append(f"CCI visualization: {error_msg_short}")
 
             # 3. Before/after CCI comparison
             if "before_after_cci" not in skip_checks:
@@ -4418,14 +4466,17 @@ class TractographyVisualizer:
                             tract_name,
                         )
                     else:
+                        error_msg_short = str(e)[:100]
                         logger.warning(
                             "Failed to generate before/after CCI comparison for %s/%s: %s",
                             subject_id,
                             tract_name,
                             e,
                         )
+                        errors.append(f"Before/after CCI: {error_msg_short}")
                 except Exception as e:
                     error_msg = str(e).lower()
+                    error_msg_short = str(e)[:100]
                     if (
                         "bad_alloc" in error_msg
                         or "memory" in error_msg
@@ -4438,12 +4489,14 @@ class TractographyVisualizer:
                             subject_id,
                             tract_name,
                         )
+                        errors.append(f"Before/after CCI: Memory error ({error_msg_short})")
                     else:
                         logger.exception(
                             "Unexpected error generating before/after CCI comparison for %s/%s",
                             subject_id,
                             tract_name,
                         )
+                        errors.append(f"Before/after CCI: {error_msg_short}")
 
             # 4. Atlas comparison (uses MNI space tracts for subject views)
             if "atlas_comparison" not in skip_checks and atlas_files is not None and tract_name in atlas_files:
@@ -4481,54 +4534,70 @@ class TractographyVisualizer:
                     for view_name, view_path in atlas_views.items():
                         tract_results[f"atlas_{view_name}"] = view_path
                 except (OSError, ValueError, RuntimeError) as e:
+                    error_msg_short = str(e)[:100]
                     logger.warning(
                         "Failed to generate atlas comparison views for %s/%s: %s",
                         subject_id,
                         tract_name,
                         e,
                     )
+                    errors.append(f"Atlas comparison: {error_msg_short}")
+            elif "atlas_comparison" not in skip_checks:
+                if atlas_files is None or tract_name not in atlas_files:
+                    missing_data.append("Atlas comparison: Missing atlas file")
+                elif subjects_mni_space is None or subject_id not in subjects_mni_space or tract_name not in subjects_mni_space[subject_id]:
+                    missing_data.append("Atlas comparison: Missing MNI space tract")
 
             # 5. Shape similarity (uses MNI space tracts)
-            if (
-                "shape_similarity" not in skip_checks and atlas_files is not None and subjects_mni_space is not None
-            ) and (
-                subject_id in subjects_mni_space
-                and tract_name in subjects_mni_space[subject_id]
-                and tract_name in atlas_files
-            ):
-                try:
-                    # Use MNI space tract for shape similarity
-                    tract_file_mni = subjects_mni_space[subject_id][tract_name]
-                    atlas_file = atlas_files[tract_name]
-                    # Calculate shape similarity score
-                    similarity_score = self.calculate_shape_similarity(
-                        tract_file_mni,
-                        atlas_file,
-                        atlas_ref_img=atlas_ref_img,
-                        flip_lr=flip_lr,
-                        **kwargs,
-                    )
-                    tract_results["shape_similarity_score"] = str(similarity_score)
+            if "shape_similarity" not in skip_checks:
+                if (
+                    atlas_files is not None
+                    and subjects_mni_space is not None
+                    and subject_id in subjects_mni_space
+                    and tract_name in subjects_mni_space[subject_id]
+                    and tract_name in atlas_files
+                ):
+                    try:
+                        # Use MNI space tract for shape similarity
+                        tract_file_mni = subjects_mni_space[subject_id][tract_name]
+                        atlas_file = atlas_files[tract_name]
+                        # Calculate shape similarity score
+                        similarity_score = self.calculate_shape_similarity(
+                            tract_file_mni,
+                            atlas_file,
+                            atlas_ref_img=atlas_ref_img,
+                            flip_lr=flip_lr,
+                            **kwargs,
+                        )
+                        tract_results["shape_similarity_score"] = str(similarity_score)
+                        metrics["shape_similarity_score"] = float(similarity_score)
 
-                    # Visualize shape similarity (uses subject tract, so use subject_kwargs)
-                    similarity_views = self.visualize_shape_similarity(
-                        tract_file_mni,
-                        atlas_file,
-                        atlas_ref_img=atlas_ref_img,
-                        flip_lr=flip_lr,
-                        output_dir=tract_output_dir,
-                        **subject_merged_kwargs,
-                    )
-                    # Add similarity views to results
-                    for view_name, view_path in similarity_views.items():
-                        tract_results[f"similarity_{view_name}"] = view_path
-                except (OSError, ValueError, RuntimeError, IndexError) as e:
-                    logger.warning(
-                        "Failed to calculate/visualize shape similarity for %s/%s: %s",
-                        subject_id,
-                        tract_name,
-                        e,
-                    )
+                        # Visualize shape similarity (uses subject tract, so use subject_kwargs)
+                        similarity_views = self.visualize_shape_similarity(
+                            tract_file_mni,
+                            atlas_file,
+                            atlas_ref_img=atlas_ref_img,
+                            flip_lr=flip_lr,
+                            output_dir=tract_output_dir,
+                            **subject_merged_kwargs,
+                        )
+                        # Add similarity views to results
+                        for view_name, view_path in similarity_views.items():
+                            tract_results[f"similarity_{view_name}"] = view_path
+                    except (OSError, ValueError, RuntimeError, IndexError) as e:
+                        error_msg_short = str(e)[:100]
+                        logger.warning(
+                            "Failed to calculate/visualize shape similarity for %s/%s: %s",
+                            subject_id,
+                            tract_name,
+                            e,
+                        )
+                        errors.append(f"Shape similarity: {error_msg_short}")
+                else:
+                    if atlas_files is None or tract_name not in atlas_files:
+                        missing_data.append("Shape similarity: Missing atlas file")
+                    elif subjects_mni_space is None or subject_id not in subjects_mni_space or tract_name not in subjects_mni_space[subject_id]:
+                        missing_data.append("Shape similarity: Missing MNI space tract")
 
             # 6. AFQ profile (requires metric files per subject and atlas files as model files)
             if ("afq_profile" not in skip_checks and metric_files is not None and atlas_files is not None) and (
@@ -4562,6 +4631,7 @@ class TractographyVisualizer:
                                 metric_name,
                             )
                         else:
+                            error_msg_short = str(e)[:100]
                             logger.warning(
                                 "Failed to generate AFQ profile for %s/%s/%s: %s",
                                 subject_id,
@@ -4569,6 +4639,12 @@ class TractographyVisualizer:
                                 metric_name,
                                 e,
                             )
+                            errors.append(f"AFQ profile ({metric_name}): {error_msg_short}")
+            elif "afq_profile" not in skip_checks:
+                if metric_files is None or subject_id not in metric_files:
+                    missing_data.append("AFQ profile: Missing metric files")
+                elif atlas_files is None or tract_name not in atlas_files:
+                    missing_data.append("AFQ profile: Missing atlas file")
 
             # 7. Bundle assignment (uses MNI space tracts and atlas files as model files)
             if (
@@ -4593,12 +4669,19 @@ class TractographyVisualizer:
                     for view_name, view_path in assignment_views.items():
                         tract_results[f"assignment_{view_name}"] = view_path
                 except (OSError, ValueError, RuntimeError, IndexError) as e:
+                    error_msg_short = str(e)[:100]
                     logger.warning(
                         "Failed to generate bundle assignment for %s/%s: %s",
                         subject_id,
                         tract_name,
                         e,
                     )
+                    errors.append(f"Bundle assignment: {error_msg_short}")
+            elif "bundle_assignment" not in skip_checks:
+                if atlas_files is None or tract_name not in atlas_files:
+                    missing_data.append("Bundle assignment: Missing atlas file")
+                elif subjects_mni_space is None or subject_id not in subjects_mni_space or tract_name not in subjects_mni_space[subject_id]:
+                    missing_data.append("Bundle assignment: Missing MNI space tract")
 
         except (OSError, ValueError, RuntimeError, MemoryError, SystemExit, KeyboardInterrupt) as e:
             error_msg = str(e).lower()
@@ -4615,10 +4698,13 @@ class TractographyVisualizer:
                     tract_name,
                 )
             else:
+                error_msg_short = str(e)[:100]
                 logger.exception("Error processing %s/%s", subject_id, tract_name)
+                errors.append(f"General processing error: {error_msg_short}")
         except Exception as e:
             # Catch-all for any other exceptions (including C++ exceptions that might not be properly caught)
             error_msg = str(e).lower()
+            error_msg_short = str(e)[:100]
             if (
                 "bad_alloc" in error_msg
                 or "memory" in error_msg
@@ -4631,6 +4717,7 @@ class TractographyVisualizer:
                     subject_id,
                     tract_name,
                 )
+                errors.append(f"General processing error: Memory error ({error_msg_short})")
             else:
                 logger.exception(
                     "Unexpected error processing %s/%s (type: %s)",
@@ -4638,7 +4725,15 @@ class TractographyVisualizer:
                     tract_name,
                     type(e).__name__,
                 )
+                errors.append(f"General processing error: {error_msg_short} ({type(e).__name__})")
         finally:
+            # Store metrics and errors in results
+            if metrics:
+                tract_results["_metrics"] = json.dumps(metrics)
+            if errors:
+                tract_results["_errors"] = json.dumps(errors)
+            if missing_data:
+                tract_results["_missing_data"] = json.dumps(missing_data)
             # Clean up memory after processing this tract
             gc.collect()
 

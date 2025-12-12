@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 
 def create_quality_check_html(
@@ -58,14 +59,35 @@ def create_quality_check_html(
     # Convert file paths to relative paths for HTML
     html_dir = Path(output_file).parent
     data_processed: dict[str, dict[str, dict[str, str]]] = {}
+    summary_data: list[dict[str, Any]] = []  # For summary table
 
     for subject_id, tracts in data.items():
         data_processed[subject_id] = {}
         for tract_name, media in tracts.items():
             data_processed[subject_id][tract_name] = {}
+            metrics_dict = {}
+            errors_list = []
+            missing_data_list = []
+            
             for media_type, file_path in media.items():
+                # Extract metrics, errors, and missing_data
+                if media_type == "_metrics":
+                    try:
+                        metrics_dict = json.loads(file_path)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                elif media_type == "_errors":
+                    try:
+                        errors_list = json.loads(file_path)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                elif media_type == "_missing_data":
+                    try:
+                        missing_data_list = json.loads(file_path)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 # Handle numeric scores (like shape_similarity_score)
-                if isinstance(file_path, (int, float)):
+                elif isinstance(file_path, (int, float)):
                     data_processed[subject_id][tract_name][media_type] = str(file_path)
                 elif file_path and os.path.exists(file_path):
                     # Convert to relative path from HTML file location
@@ -78,6 +100,15 @@ def create_quality_check_html(
                 elif file_path:
                     # Store as-is if it's a string but file doesn't exist (might be a score string)
                     data_processed[subject_id][tract_name][media_type] = file_path
+            
+            # Add to summary data
+            summary_data.append({
+                "subject": subject_id,
+                "tract": tract_name,
+                "metrics": metrics_dict,
+                "errors": errors_list,
+                "missing_data": missing_data_list,
+            })
 
     # Extract unique subjects and tracts for filters
     subjects = sorted(data_processed.keys())
@@ -419,6 +450,125 @@ def create_quality_check_html(
             color: #666;
         }}
 
+        .tabs {{
+            background: white;
+            padding: 0;
+            margin: 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 99;
+        }}
+
+        .tab-buttons {{
+            display: flex;
+            border-bottom: 2px solid #e0e0e0;
+            background: white;
+        }}
+
+        .tab-button {{
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }}
+
+        .tab-button:hover {{
+            background: #f8f9fa;
+            color: #333;
+        }}
+
+        .tab-button.active {{
+            color: #667eea;
+            border-bottom-color: #667eea;
+            background: white;
+        }}
+
+        .tab-content {{
+            display: none;
+        }}
+
+        .tab-content.active {{
+            display: block;
+        }}
+
+        .summary-section {{
+            background: white;
+            padding: 2rem;
+            margin: 2rem auto;
+            max-width: 1800px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+
+        .summary-section h2 {{
+            margin-bottom: 1.5rem;
+            color: #333;
+            font-size: 1.5rem;
+        }}
+
+        .summary-table-container {{
+            overflow-x: auto;
+            width: 100%;
+        }}
+
+        .summary-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            min-width: 1000px;
+        }}
+
+        .summary-table th,
+        .summary-table td {{
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+
+        .summary-table th {{
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }}
+
+        .summary-table tr:hover {{
+            background: #f8f9fa;
+        }}
+
+        .summary-table .metric-value {{
+            font-weight: 600;
+            color: #667eea;
+        }}
+
+        .summary-table .error-cell {{
+            color: #d32f2f;
+            font-size: 0.85rem;
+            max-width: 300px;
+            word-wrap: break-word;
+        }}
+
+        .summary-table .missing-cell {{
+            color: #f57c00;
+            font-size: 0.85rem;
+            max-width: 300px;
+            word-wrap: break-word;
+        }}
+
+        .summary-table .no-data {{
+            color: #999;
+            font-style: italic;
+        }}
+
         @media (max-width: 768px) {{
             .grid {{
                 grid-template-columns: 1fr;
@@ -435,6 +585,20 @@ def create_quality_check_html(
 
             .modal-media-container {{
                 grid-template-columns: 1fr;
+            }}
+
+            .tab-button {{
+                padding: 0.75rem 1rem;
+                font-size: 0.9rem;
+            }}
+
+            .summary-table {{
+                font-size: 0.8rem;
+            }}
+
+            .summary-table th,
+            .summary-table td {{
+                padding: 0.5rem;
             }}
         }}
     </style>
@@ -478,11 +642,45 @@ def create_quality_check_html(
         </div>
     </div>
 
-    <div class="grid-container">
-        <div class="grid" id="items-grid"></div>
-        <div class="no-results" id="no-results" style="display: none;">
-            <h3>No items found</h3>
-            <p>Try adjusting your filters or search terms</p>
+    <div class="tabs">
+        <div class="tab-buttons">
+            <button class="tab-button active" data-tab="visualizations">Visualizations</button>
+            <button class="tab-button" data-tab="summary">Summary</button>
+        </div>
+    </div>
+
+    <div id="visualizations-tab" class="tab-content active">
+        <div class="grid-container">
+            <div class="grid" id="items-grid"></div>
+            <div class="no-results" id="no-results" style="display: none;">
+                <h3>No items found</h3>
+                <p>Try adjusting your filters or search terms</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="summary-tab" class="tab-content">
+        <div class="summary-section">
+            <h2>Summary Table: Metrics, Errors, and Missing Data</h2>
+            <div class="summary-table-container">
+                <table class="summary-table">
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Tract</th>
+                            <th>Initial Streamlines</th>
+                            <th>After CCI Filter</th>
+                            <th>CCI Mean</th>
+                            <th>CCI Median</th>
+                            <th>Shape Similarity</th>
+                            <th>Errors</th>
+                            <th>Missing Data</th>
+                        </tr>
+                    </thead>
+                    <tbody id="summary-table-body">
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -498,6 +696,7 @@ def create_quality_check_html(
 
     <script>
         const data = {json.dumps(data_processed)};
+        const summaryData = {json.dumps(summary_data)};
         const itemsPerPage = {items_per_page};
 
         let currentPage = 1;
@@ -834,7 +1033,71 @@ def create_quality_check_html(
             if (e.target.id === 'modal') closeModal();
         }});
 
+        function renderSummaryTable() {{
+            const tbody = document.getElementById('summary-table-body');
+            tbody.innerHTML = summaryData.map(item => {{
+                const metrics = item.metrics || {{}};
+                const errors = item.errors || [];
+                const missing = item.missing_data || [];
+                
+                const formatValue = (val) => {{
+                    if (val === null || val === undefined) return '<span class="no-data">N/A</span>';
+                    if (typeof val === 'number') {{
+                        if (val % 1 === 0) return val.toString();
+                        return val.toFixed(3);
+                    }}
+                    return val;
+                }};
+                
+                const errorsHtml = errors.length > 0
+                    ? errors.map(e => `<div class="error-cell">${{e}}</div>`).join('')
+                    : '<span class="no-data">None</span>';
+                
+                const missingHtml = missing.length > 0
+                    ? missing.map(m => `<div class="missing-cell">${{m}}</div>`).join('')
+                    : '<span class="no-data">None</span>';
+                
+                return `
+                    <tr>
+                        <td>${{item.subject}}</td>
+                        <td>${{item.tract}}</td>
+                        <td class="metric-value">${{formatValue(metrics.initial_streamline_count)}}</td>
+                        <td class="metric-value">${{formatValue(metrics.cci_after_filter_count)}}</td>
+                        <td class="metric-value">${{formatValue(metrics.cci_mean)}}</td>
+                        <td class="metric-value">${{formatValue(metrics.cci_median)}}</td>
+                        <td class="metric-value">${{formatValue(metrics.shape_similarity_score)}}</td>
+                        <td>${{errorsHtml}}</td>
+                        <td>${{missingHtml}}</td>
+                    </tr>
+                `;
+            }}).join('');
+        }}
+
+        function switchTab(tabName) {{
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {{
+                tab.classList.remove('active');
+            }});
+            document.querySelectorAll('.tab-button').forEach(btn => {{
+                btn.classList.remove('active');
+            }});
+
+            // Show selected tab
+            document.getElementById(tabName + '-tab').classList.add('active');
+            // Activate the clicked button
+            document.querySelector(`[data-tab="${{tabName}}"]`).classList.add('active');
+        }}
+
+        // Add click handlers to tab buttons
+        document.querySelectorAll('.tab-button').forEach(button => {{
+            button.addEventListener('click', function() {{
+                const tabName = this.getAttribute('data-tab');
+                switchTab(tabName);
+            }});
+        }});
+
         // Initialize
+        renderSummaryTable();
         filterData();
     </script>
 </body>
