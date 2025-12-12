@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.4.0](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.4.0) - 2025-12-12
+
+<small>[Compare with 0.3.9](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.3.9...0.4.0)</small>
+
+### Features
+
+- interactive qc for more in-depth tract analysis ([1bedc03](https://github.com/mcw-meier-lab/pyTractoViz/commit/1bedc0381c5395c8db23ae9bb8353337d90f048b) by Lezlie Espana).
+- add qc metrics table ([46dda95](https://github.com/mcw-meier-lab/pyTractoViz/commit/46dda95660b80fb67eeb5b7ec581bdb950234e6e) by Lezlie Espana).
+
+### Bug Fixes
+
+- don't flip MNI/atlas views ([775ba07](https://github.com/mcw-meier-lab/pyTractoViz/commit/775ba076cf85b5fad3875b2d59f21a3aaed51803) by Lezlie Espana).
+- bundle assignment colors ([1e1659a](https://github.com/mcw-meier-lab/pyTractoViz/commit/1e1659abedef75c7f126f9589d41b2cb4f2c779a) by Lezlie Espana).
+
+### Code Refactoring
+
+- formatting/linting fixes ([618cd69](https://github.com/mcw-meier-lab/pyTractoViz/commit/618cd696a84c9fb4079dd9f6fdc301f94b2360e0) by Lezlie Espana).
+- linting errors ([9878be5](https://github.com/mcw-meier-lab/pyTractoViz/commit/9878be5e27b14f3e9a80027e566324e77e751989) by Lezlie Espana).
+
 ## [0.3.9](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.3.9) - 2025-12-10
 
 <small>[Compare with 0.3.8](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.3.8...0.3.9)</small>
