@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from pytractoviz._internal import debug
-from pytractoviz.viz import TractographyVisualizer
+from pytractoviz.viz import (
+    InvalidInputError,
+    TractographyVisualizationError,
+    TractographyVisualizer,
+)
 
 
 class _DebugInfo(argparse.Action):
@@ -39,10 +43,10 @@ def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pytractoviz")
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {debug._get_version()}")
     parser.add_argument("--debug-info", action=_DebugInfo, help="Print debug information.")
-    
+
     # Add subcommands
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
+
     # Interactive QC subcommand
     qc_parser = subparsers.add_parser(
         "qc-interactive",
@@ -110,7 +114,7 @@ def get_parser() -> argparse.ArgumentParser:
         default=0,
         help="Number of tracts to skip at the start (default: 0)",
     )
-    
+
     return parser
 
 
@@ -128,13 +132,13 @@ def _collect_tract_files(paths: list[str]) -> list[Path]:
         Sorted list of .trk file paths.
     """
     tract_files: list[Path] = []
-    
+
     for path_str in paths:
         path = Path(path_str)
         if not path.exists():
             print(f"Warning: Path does not exist: {path}", file=sys.stderr)
             continue
-            
+
         if path.is_file():
             if path.suffix.lower() == ".trk":
                 tract_files.append(path)
@@ -148,7 +152,7 @@ def _collect_tract_files(paths: list[str]) -> list[Path]:
             tract_files.extend(found_files)
         else:
             print(f"Warning: Path is neither file nor directory: {path}", file=sys.stderr)
-    
+
     return sorted(set(tract_files))  # Remove duplicates and sort
 
 
@@ -167,23 +171,23 @@ def main(args: list[str] | None = None) -> int:
     """
     parser = get_parser()
     opts = parser.parse_args(args=args)
-    
+
     if opts.command == "qc-interactive":
         # Collect all tract files
         tract_files = _collect_tract_files(opts.tracts)
-        
+
         if not tract_files:
             print("Error: No .trk files found.", file=sys.stderr)
             return 1
-        
+
         # Skip tracts if requested
         if opts.skip > 0:
             if opts.skip >= len(tract_files):
                 print(f"Error: Cannot skip {opts.skip} tracts (only {len(tract_files)} found)", file=sys.stderr)
                 return 1
-            tract_files = tract_files[opts.skip:]
+            tract_files = tract_files[opts.skip :]
             print(f"Skipping first {opts.skip} tracts. Starting with: {tract_files[0].name}")
-        
+
         print(f"\nFound {len(tract_files)} tract file(s) to review.")
         print("Instructions:")
         print("  - Rotate: Click and drag with left mouse button")
@@ -191,15 +195,15 @@ def main(args: list[str] | None = None) -> int:
         print("  - Pan: Middle-click and drag (or Shift+left-click)")
         print("  - Close window to move to next tract")
         print("  - Press 'q' or close window to exit current tract\n")
-        
+
         # Initialize visualizer
         visualizer = TractographyVisualizer(reference_image=opts.ref_img)
-        
+
         # Process each tract
         for i, tract_file in enumerate(tract_files, start=1):
             print(f"\n[{i}/{len(tract_files)}] Loading: {tract_file.name}")
             print(f"  Full path: {tract_file}")
-            
+
             try:
                 visualizer.view_tract_interactive(
                     tract_file,
@@ -216,18 +220,18 @@ def main(args: list[str] | None = None) -> int:
             except KeyboardInterrupt:
                 print("\n\nInterrupted by user. Exiting.")
                 return 130
-            except Exception as e:
+            except (FileNotFoundError, InvalidInputError, TractographyVisualizationError) as e:
                 print(f"  ✗ Error viewing {tract_file.name}: {e}", file=sys.stderr)
                 response = input("  Continue to next tract? [Y/n]: ").strip().lower()
                 if response and response != "y":
                     return 1
-        
+
         print(f"\n✓ Completed review of all {len(tract_files)} tract(s).")
         return 0
-    
+
     # Default behavior (no command specified)
     if opts.command is None:
         parser.print_help()
         return 0
-    
+
     return 0

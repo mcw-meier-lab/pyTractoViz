@@ -1855,9 +1855,7 @@ class TractographyVisualizer:
 
         Examples
         --------
-        >>> visualizer = TractographyVisualizer(
-        ...     reference_image="t1w.nii.gz"
-        ... )
+        >>> visualizer = TractographyVisualizer(reference_image="t1w.nii.gz")
         >>> # View a single tract interactively
         >>> visualizer.view_tract_interactive("tract.trk")
         """
@@ -3814,14 +3812,14 @@ class TractographyVisualizer:
             # Assignments are in the order points appear when iterating through streamlines sequentially
             assignment_indices = assignment_map(tract_streamlines, atlas_streamlines, n_segments)
             assignment_indices = np.array(assignment_indices)
-            
+
             # Validate that the number of assignments matches the number of points
             total_points = sum(len(sl) for sl in tract_streamlines)
             if len(assignment_indices) != total_points:
                 raise ValueError(
                     f"Mismatch between number of assignments ({len(assignment_indices)}) "
                     f"and number of points ({total_points}). This may indicate an issue "
-                    "with streamline filtering or assignment_map."
+                    "with streamline filtering or assignment_map.",
                 )
 
             # Generate colors for each segment
@@ -3865,7 +3863,7 @@ class TractographyVisualizer:
                         raise ValueError(
                             f"Assignment index {assignment_idx} exceeds number of assignments "
                             f"({len(assignment_indices)}). This indicates a mismatch between "
-                            "streamlines and assignments."
+                            "streamlines and assignments.",
                         )
                     # Get the color for this point's assigned segment
                     seg_idx = assignment_indices[assignment_idx]
@@ -3876,12 +3874,12 @@ class TractographyVisualizer:
                     else:
                         point_colors.append(tuple(segment_colors[seg_idx]))
                     assignment_idx += 1
-            
+
             # Final validation: ensure we processed all assignments
             if assignment_idx != len(assignment_indices):
                 raise ValueError(
                     f"Processed {assignment_idx} points but have {len(assignment_indices)} assignments. "
-                    "This indicates a mismatch between streamlines and assignments."
+                    "This indicates a mismatch between streamlines and assignments.",
                 )
 
             # Debug: Show sample of assignments and colors for first streamline (after point_colors is created)
@@ -4462,10 +4460,10 @@ class TractographyVisualizer:
             metrics["initial_streamline_count"] = initial_streamline_count
             del tract
             gc.collect()
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.warning("Failed to load tract for metrics: %s", e)
             metrics["initial_streamline_count"] = None
-            errors.append(f"Failed to load tract: {str(e)}")
+            errors.append(f"Failed to load tract: {e!s}")
 
         try:
             # 1. Standard anatomical views
@@ -4536,15 +4534,19 @@ class TractographyVisualizer:
                             metrics["cci_min"] = float(np.min(cci_values))
                             metrics["cci_max"] = float(np.max(cci_values))
                             metrics["cci_after_filter_count"] = len(cci_values)
-                            metrics["cci_removed_count"] = metrics.get("initial_streamline_count", 0) - len(cci_values) if metrics.get("initial_streamline_count") is not None else None
+                            metrics["cci_removed_count"] = (
+                                metrics.get("initial_streamline_count", 0) - len(cci_values)
+                                if metrics.get("initial_streamline_count") is not None
+                                else None
+                            )
                         else:
                             metrics["cci_after_filter_count"] = 0
                             missing_data.append("CCI: No streamlines after filtering")
                         del tract, cci_values, keep_tract
                         gc.collect()
-                    except Exception as e:
+                    except (OSError, ValueError, RuntimeError, InvalidInputError, TractographyVisualizationError) as e:
                         logger.warning("Failed to calculate CCI metrics: %s", e)
-                        errors.append(f"CCI metrics calculation failed: {str(e)}")
+                        errors.append(f"CCI metrics calculation failed: {e!s}")
 
                     cci_plots = self.plot_cci(
                         tract_file,  # type: ignore[arg-type]
@@ -4698,7 +4700,11 @@ class TractographyVisualizer:
             elif "atlas_comparison" not in skip_checks:
                 if atlas_files is None or tract_name not in atlas_files:
                     missing_data.append("Atlas comparison: Missing atlas file")
-                elif subjects_mni_space is None or subject_id not in subjects_mni_space or tract_name not in subjects_mni_space[subject_id]:
+                elif (
+                    subjects_mni_space is None
+                    or subject_id not in subjects_mni_space
+                    or tract_name not in subjects_mni_space[subject_id]
+                ):
                     missing_data.append("Atlas comparison: Missing MNI space tract")
 
             # 5. Shape similarity (uses MNI space tracts)
@@ -4746,11 +4752,14 @@ class TractographyVisualizer:
                             e,
                         )
                         errors.append(f"Shape similarity: {error_msg_short}")
-                else:
-                    if atlas_files is None or tract_name not in atlas_files:
-                        missing_data.append("Shape similarity: Missing atlas file")
-                    elif subjects_mni_space is None or subject_id not in subjects_mni_space or tract_name not in subjects_mni_space[subject_id]:
-                        missing_data.append("Shape similarity: Missing MNI space tract")
+                elif atlas_files is None or tract_name not in atlas_files:
+                    missing_data.append("Shape similarity: Missing atlas file")
+                elif (
+                    subjects_mni_space is None
+                    or subject_id not in subjects_mni_space
+                    or tract_name not in subjects_mni_space[subject_id]
+                ):
+                    missing_data.append("Shape similarity: Missing MNI space tract")
 
             # 6. AFQ profile (requires metric files per subject and atlas files as model files)
             if ("afq_profile" not in skip_checks and metric_files is not None and atlas_files is not None) and (
@@ -4833,7 +4842,11 @@ class TractographyVisualizer:
             elif "bundle_assignment" not in skip_checks:
                 if atlas_files is None or tract_name not in atlas_files:
                     missing_data.append("Bundle assignment: Missing atlas file")
-                elif subjects_mni_space is None or subject_id not in subjects_mni_space or tract_name not in subjects_mni_space[subject_id]:
+                elif (
+                    subjects_mni_space is None
+                    or subject_id not in subjects_mni_space
+                    or tract_name not in subjects_mni_space[subject_id]
+                ):
                     missing_data.append("Bundle assignment: Missing MNI space tract")
 
         except (OSError, ValueError, RuntimeError, MemoryError, SystemExit, KeyboardInterrupt) as e:

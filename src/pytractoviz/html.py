@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -68,24 +69,18 @@ def create_quality_check_html(
             metrics_dict = {}
             errors_list = []
             missing_data_list = []
-            
+
             for media_type, file_path in media.items():
                 # Extract metrics, errors, and missing_data
                 if media_type == "_metrics":
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError, TypeError):
                         metrics_dict = json.loads(file_path)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
                 elif media_type == "_errors":
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError, TypeError):
                         errors_list = json.loads(file_path)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
                 elif media_type == "_missing_data":
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError, TypeError):
                         missing_data_list = json.loads(file_path)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
                 # Handle numeric scores (like shape_similarity_score)
                 elif isinstance(file_path, (int, float)):
                     data_processed[subject_id][tract_name][media_type] = str(file_path)
@@ -100,15 +95,17 @@ def create_quality_check_html(
                 elif file_path:
                     # Store as-is if it's a string but file doesn't exist (might be a score string)
                     data_processed[subject_id][tract_name][media_type] = file_path
-            
+
             # Add to summary data
-            summary_data.append({
-                "subject": subject_id,
-                "tract": tract_name,
-                "metrics": metrics_dict,
-                "errors": errors_list,
-                "missing_data": missing_data_list,
-            })
+            summary_data.append(
+                {
+                    "subject": subject_id,
+                    "tract": tract_name,
+                    "metrics": metrics_dict,
+                    "errors": errors_list,
+                    "missing_data": missing_data_list,
+                },
+            )
 
     # Extract unique subjects and tracts for filters
     subjects = sorted(data_processed.keys())
@@ -1039,7 +1036,7 @@ def create_quality_check_html(
                 const metrics = item.metrics || {{}};
                 const errors = item.errors || [];
                 const missing = item.missing_data || [];
-                
+
                 const formatValue = (val) => {{
                     if (val === null || val === undefined) return '<span class="no-data">N/A</span>';
                     if (typeof val === 'number') {{
@@ -1048,15 +1045,15 @@ def create_quality_check_html(
                     }}
                     return val;
                 }};
-                
+
                 const errorsHtml = errors.length > 0
                     ? errors.map(e => `<div class="error-cell">${{e}}</div>`).join('')
                     : '<span class="no-data">None</span>';
-                
+
                 const missingHtml = missing.length > 0
                     ? missing.map(m => `<div class="missing-cell">${{m}}</div>`).join('')
                     : '<span class="no-data">None</span>';
-                
+
                 return `
                     <tr>
                         <td>${{item.subject}}</td>
