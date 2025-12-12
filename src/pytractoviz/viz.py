@@ -1794,6 +1794,159 @@ class TractographyVisualizer:
         else:
             return generated_views
 
+    def view_tract_interactive(
+        self,
+        tract_file: str | Path,
+        ref_img: str | Path | None = None,
+        *,
+        show_glass_brain: bool = True,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
+        flip_lr: bool = False,
+        window_size: tuple[int, int] = (800, 800),
+    ) -> None:
+        """Display a tract in an interactive 3D viewer.
+
+        Opens a FURY window that allows the user to rotate, zoom, and interact
+        with the tract visualization. The window blocks until closed.
+
+        Parameters
+        ----------
+        tract_file : str | Path
+            Path to the tractography file.
+        ref_img : str | Path | None, optional
+            Path to the reference image. If None, uses the reference image
+            set during initialization or via `set_reference_image()`.
+        show_glass_brain : bool, optional
+            Whether to show the glass brain outline. Default is True.
+        max_streamlines : int | None, optional
+            Maximum number of streamlines to render. If the tract has more
+            streamlines, they will be randomly subsampled. This can help avoid
+            VTK segfaults with very large tracts. Default is None (no limit).
+        subsample_factor : float | None, optional
+            Factor to subsample streamlines (0.0 to 1.0). If 0.5, keeps 50% of
+            streamlines. If None, no subsampling. Default is None.
+        max_points_per_streamline : int | None, optional
+            Maximum number of points per streamline. Streamlines with more points
+            will be resampled to this limit. This can help avoid VTK segfaults
+            by reducing total point count. Default is None (no limit).
+        resample_streamlines : bool, optional
+            If True, resample all streamlines using approx_polygon_track with
+            distance=0.25 to reduce point count. This is a more aggressive
+            resampling that reduces points while preserving shape. Default is False.
+        flip_lr : bool, optional
+            Whether to flip left-right (X-axis) when transforming tract.
+            This may be needed for some coordinate conventions or file formats
+            where the left-right orientation differs (e.g., when working with
+            MNI space). Default is False.
+        window_size : tuple[int, int], optional
+            Size of the interactive window in pixels. Default is (800, 800).
+
+        Raises
+        ------
+        FileNotFoundError
+            If required files are not found.
+        InvalidInputError
+            If no reference image is provided and none was set.
+        TractographyVisualizationError
+            If loading or visualization fails.
+
+        Examples
+        --------
+        >>> visualizer = TractographyVisualizer(
+        ...     reference_image="t1w.nii.gz"
+        ... )
+        >>> # View a single tract interactively
+        >>> visualizer.view_tract_interactive("tract.trk")
+        """
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
+
+        tract_file = Path(tract_file)
+        if not tract_file.exists():
+            raise FileNotFoundError(f"Tract file not found: {tract_file}")
+
+        try:
+            # Load tract
+            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+            tract.to_rasmm()
+            ref_img_obj = nib.load(str(ref_img))
+            tract_streamlines = transform_streamlines(
+                tract.streamlines,
+                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Apply left-right flip if needed
+            if flip_lr:
+                if not tract_streamlines or len(tract_streamlines) == 0:
+                    logger.warning("Tract has 0 streamlines before flip. Skipping visualization.")
+                    return
+                tract_streamlines = Streamlines(
+                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in tract_streamlines],
+                )
+
+            # Filter streamlines if requested
+            tract_streamlines = self._filter_streamlines(
+                tract_streamlines,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
+
+            # Check if streamlines are empty after filtering
+            if not tract_streamlines or len(tract_streamlines) == 0:
+                logger.warning("Tract has 0 streamlines after filtering. Skipping visualization.")
+                return
+
+            # Calculate colors based on streamline directions
+            streamline_colors = calculate_direction_colors(tract_streamlines)
+
+            # Get centroid for camera positioning
+            centroid = calculate_centroid(tract_streamlines)
+
+            # Clean up loaded objects
+            del tract, ref_img_obj
+
+            # Create scene
+            scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+            # Create and add streamline actor
+            tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
+            scene.add(tract_actor)
+
+            # Set camera to show the tract nicely
+            bbox_size = calculate_bbox_size(tract_streamlines)
+            # Use a default view (coronal) for initial camera position
+            self._set_anatomical_camera(
+                scene,
+                centroid,
+                "coronal",
+                bbox_size=bbox_size,
+            )
+
+            # Show interactive window (blocks until closed)
+            # Use window.show() which is blocking and simpler
+            window.show(
+                scene,
+                size=window_size,
+                title=str(tract_file.name),
+            )
+
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to display tract interactively: {e}",
+            ) from e
+
     def generate_atlas_views(
         self,
         atlas_file: str | Path,
