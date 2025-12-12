@@ -24,7 +24,17 @@ uv.lock
 .ruff_cache/
 __pycache__/
 
+# certain scripts
+scripts/run_rounds.py
+scripts/config_example.json
+scripts/README_ROUNDS.md
+
 # md files
 QUALITY_CHECK_REQUIREMENTS.md
 TEST_COVERAGE_PLAN.md
 TEST_COVERAGE_REVIEW.md
+MEMORY_LIMITS.md
+MEMORY_MONITORING.md
+STD_BAD_ALLOC_TROUBLESHOOTING.md
+TESTING_PLAN_INTERACTIVE_QC.md
+TESTING_SUMMARY.md
