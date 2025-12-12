@@ -1984,3 +1984,213 @@ class TestRunQualityCheckWorkflow:
         assert isinstance(result, dict)
         # Should still generate anatomical views
         mock_anatomical.assert_called()
+
+
+class TestViewTractInteractive:
+    """Test view_tract_interactive method."""
+
+    @patch("pytractoviz.viz.window.show")
+    @patch("pytractoviz.viz.calculate_bbox_size")
+    @patch("pytractoviz.viz.calculate_centroid")
+    @patch("pytractoviz.viz.calculate_direction_colors")
+    @patch.object(TractographyVisualizer, "_set_anatomical_camera")
+    @patch.object(TractographyVisualizer, "_create_streamline_actor")
+    @patch.object(TractographyVisualizer, "_filter_streamlines")
+    @patch.object(TractographyVisualizer, "_create_scene")
+    @patch("pytractoviz.viz.transform_streamlines")
+    @patch("pytractoviz.viz.nib.load")
+    @patch("pytractoviz.viz.load_trk")
+    def test_view_tract_interactive_success(
+        self,
+        mock_load_trk: Mock,
+        mock_nib_load: Mock,
+        mock_transform: Mock,
+        mock_create_scene: Mock,
+        mock_filter_streamlines: Mock,
+        mock_create_actor: Mock,
+        mock_set_camera: Mock,
+        mock_calc_colors: Mock,
+        mock_calc_centroid: Mock,
+        mock_calc_bbox: Mock,
+        mock_window_show: Mock,
+        visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
+        mock_t1w_file: Path,
+        mock_stateful_tractogram: Mock,
+        mock_nibabel_image: Mock,
+    ) -> None:
+        """Test successful interactive viewing."""
+        # Setup mocks
+        mock_tract = Mock()
+        mock_tract.streamlines = mock_stateful_tractogram.streamlines
+        mock_load_trk.return_value = mock_tract
+        mock_nib_load.return_value = mock_nibabel_image
+        mock_transform.return_value = mock_stateful_tractogram.streamlines
+        mock_filter_streamlines.return_value = mock_stateful_tractogram.streamlines
+        mock_calc_colors.return_value = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        mock_calc_centroid.return_value = np.array([0, 0, 0])
+        mock_calc_bbox.return_value = np.array([100, 100, 100])
+        mock_actor = Mock()
+        mock_create_actor.return_value = mock_actor
+        mock_scene = Mock()
+        mock_create_scene.return_value = (mock_scene, None)
+
+        # Call method
+        visualizer.view_tract_interactive(mock_tract_file, ref_img=mock_t1w_file)
+
+        # Assertions
+        mock_load_trk.assert_called_once()
+        mock_nib_load.assert_called_once()
+        mock_transform.assert_called_once()
+        mock_filter_streamlines.assert_called_once()
+        mock_create_scene.assert_called_once()
+        mock_create_actor.assert_called_once()
+        mock_scene.add.assert_called_once_with(mock_actor)
+        mock_set_camera.assert_called_once()
+        mock_window_show.assert_called_once()
+        # Verify window.show was called with scene
+        assert mock_window_show.call_args[0][0] == mock_scene
+
+    def test_view_tract_interactive_no_reference(
+        self,
+        visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
+    ) -> None:
+        """Test view_tract_interactive without reference image."""
+        visualizer._reference_image = None
+        with pytest.raises(InvalidInputError, match="No reference image provided"):
+            visualizer.view_tract_interactive(mock_tract_file)
+
+    def test_view_tract_interactive_tract_file_not_found(
+        self,
+        visualizer: TractographyVisualizer,
+        mock_t1w_file: Path,
+    ) -> None:
+        """Test view_tract_interactive with non-existent tract file."""
+        with pytest.raises(FileNotFoundError, match="Tract file not found"):
+            visualizer.view_tract_interactive("nonexistent.trk", ref_img=mock_t1w_file)
+
+    @patch("pytractoviz.viz.load_trk")
+    def test_view_tract_interactive_load_error(
+        self,
+        mock_load_trk: Mock,
+        visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
+        mock_t1w_file: Path,
+    ) -> None:
+        """Test view_tract_interactive with load error."""
+        mock_load_trk.side_effect = OSError("Load error")
+        with pytest.raises(TractographyVisualizationError, match="Failed to display tract"):
+            visualizer.view_tract_interactive(mock_tract_file, ref_img=mock_t1w_file)
+
+    @patch("pytractoviz.viz.window.show")
+    @patch("pytractoviz.viz.calculate_bbox_size")
+    @patch("pytractoviz.viz.calculate_centroid")
+    @patch("pytractoviz.viz.calculate_direction_colors")
+    @patch.object(TractographyVisualizer, "_set_anatomical_camera")
+    @patch.object(TractographyVisualizer, "_create_streamline_actor")
+    @patch.object(TractographyVisualizer, "_filter_streamlines")
+    @patch.object(TractographyVisualizer, "_create_scene")
+    @patch("pytractoviz.viz.transform_streamlines")
+    @patch("pytractoviz.viz.nib.load")
+    @patch("pytractoviz.viz.load_trk")
+    def test_view_tract_interactive_without_glass_brain(
+        self,
+        mock_load_trk: Mock,
+        mock_nib_load: Mock,
+        mock_transform: Mock,
+        mock_create_scene: Mock,
+        mock_filter_streamlines: Mock,
+        mock_create_actor: Mock,
+        mock_set_camera: Mock,
+        mock_calc_colors: Mock,
+        mock_calc_centroid: Mock,
+        mock_calc_bbox: Mock,
+        mock_window_show: Mock,
+        visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
+        mock_t1w_file: Path,
+        mock_stateful_tractogram: Mock,
+        mock_nibabel_image: Mock,
+    ) -> None:
+        """Test view_tract_interactive with show_glass_brain=False."""
+        mock_tract = Mock()
+        mock_tract.streamlines = mock_stateful_tractogram.streamlines
+        mock_load_trk.return_value = mock_tract
+        mock_nib_load.return_value = mock_nibabel_image
+        mock_transform.return_value = mock_stateful_tractogram.streamlines
+        mock_filter_streamlines.return_value = mock_stateful_tractogram.streamlines
+        mock_calc_colors.return_value = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        mock_calc_centroid.return_value = np.array([0, 0, 0])
+        mock_calc_bbox.return_value = np.array([100, 100, 100])
+        mock_actor = Mock()
+        mock_create_actor.return_value = mock_actor
+        mock_scene = Mock()
+        mock_create_scene.return_value = (mock_scene, None)
+
+        visualizer.view_tract_interactive(
+            mock_tract_file,
+            ref_img=mock_t1w_file,
+            show_glass_brain=False,
+        )
+
+        # Verify show_glass_brain=False was passed
+        mock_create_scene.assert_called_once()
+        call_kwargs = mock_create_scene.call_args[1]
+        assert call_kwargs["show_glass_brain"] is False
+
+    @patch("pytractoviz.viz.window.show")
+    @patch("pytractoviz.viz.calculate_bbox_size")
+    @patch("pytractoviz.viz.calculate_centroid")
+    @patch("pytractoviz.viz.calculate_direction_colors")
+    @patch.object(TractographyVisualizer, "_set_anatomical_camera")
+    @patch.object(TractographyVisualizer, "_create_streamline_actor")
+    @patch.object(TractographyVisualizer, "_filter_streamlines")
+    @patch.object(TractographyVisualizer, "_create_scene")
+    @patch("pytractoviz.viz.transform_streamlines")
+    @patch("pytractoviz.viz.nib.load")
+    @patch("pytractoviz.viz.load_trk")
+    def test_view_tract_interactive_with_custom_window_size(
+        self,
+        mock_load_trk: Mock,
+        mock_nib_load: Mock,
+        mock_transform: Mock,
+        mock_create_scene: Mock,
+        mock_filter_streamlines: Mock,
+        mock_create_actor: Mock,
+        mock_set_camera: Mock,
+        mock_calc_colors: Mock,
+        mock_calc_centroid: Mock,
+        mock_calc_bbox: Mock,
+        mock_window_show: Mock,
+        visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
+        mock_t1w_file: Path,
+        mock_stateful_tractogram: Mock,
+        mock_nibabel_image: Mock,
+    ) -> None:
+        """Test view_tract_interactive with custom window size."""
+        mock_tract = Mock()
+        mock_tract.streamlines = mock_stateful_tractogram.streamlines
+        mock_load_trk.return_value = mock_tract
+        mock_nib_load.return_value = mock_nibabel_image
+        mock_transform.return_value = mock_stateful_tractogram.streamlines
+        mock_filter_streamlines.return_value = mock_stateful_tractogram.streamlines
+        mock_calc_colors.return_value = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        mock_calc_centroid.return_value = np.array([0, 0, 0])
+        mock_calc_bbox.return_value = np.array([100, 100, 100])
+        mock_actor = Mock()
+        mock_create_actor.return_value = mock_actor
+        mock_scene = Mock()
+        mock_create_scene.return_value = (mock_scene, None)
+
+        visualizer.view_tract_interactive(
+            mock_tract_file,
+            ref_img=mock_t1w_file,
+            window_size=(1200, 1200),
+        )
+
+        # Verify window size was passed
+        mock_window_show.assert_called_once()
+        call_kwargs = mock_window_show.call_args[1]
+        assert call_kwargs["size"] == (1200, 1200)
