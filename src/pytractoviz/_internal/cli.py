@@ -197,7 +197,7 @@ def main(args: list[str] | None = None) -> int:
         print("  - Press 'q' or close window to exit current tract\n")
 
         # Initialize visualizer
-        visualizer = TractographyVisualizer(reference_image=opts.ref_img)
+        visualizer = TractographyVisualizer(reference_image=Path(opts.ref_img))
 
         # Process each tract
         for i, tract_file in enumerate(tract_files, start=1):

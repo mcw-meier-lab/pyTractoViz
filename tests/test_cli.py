@@ -10,6 +10,7 @@ import pytest
 from pytractoviz import main
 from pytractoviz._internal import debug
 from pytractoviz._internal.cli import _collect_tract_files
+from pytractoviz.viz import TractographyVisualizationError
 
 
 def test_main() -> None:
@@ -169,7 +170,9 @@ class TestQcInteractiveCommand:
         result = main(["qc-interactive", str(tract_file), "--ref", str(ref_file)])
 
         assert result == 0
-        mock_visualizer_class.assert_called_once_with(reference_image=ref_file)
+        # CLI converts ref_img string to Path, so check it was called with Path
+        call_kwargs = mock_visualizer_class.call_args[1]
+        assert call_kwargs["reference_image"] == Path(ref_file)
         mock_visualizer.view_tract_interactive.assert_called_once()
         captured = capsys.readouterr()
         assert "Found 1 tract file(s)" in captured.out
@@ -261,7 +264,7 @@ class TestQcInteractiveCommand:
         mock_visualizer_class.return_value = mock_visualizer
         # First call raises error, second succeeds
         mock_visualizer.view_tract_interactive.side_effect = [
-            Exception("Test error"),
+            TractographyVisualizationError("Test error"),
             None,
         ]
 

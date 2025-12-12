@@ -3816,11 +3816,12 @@ class TractographyVisualizer:
             # Validate that the number of assignments matches the number of points
             total_points = sum(len(sl) for sl in tract_streamlines)
             if len(assignment_indices) != total_points:
-                raise ValueError(
+                msg = (
                     f"Mismatch between number of assignments ({len(assignment_indices)}) "
                     f"and number of points ({total_points}). This may indicate an issue "
-                    "with streamline filtering or assignment_map.",
+                    "with streamline filtering or assignment_map."
                 )
+                raise ValueError(msg)  # noqa: TRY301
 
             # Generate colors for each segment
             # Use random colors like DIPY example (produces wide spectrum of distinct colors)
@@ -3860,11 +3861,12 @@ class TractographyVisualizer:
                 for _ in range(len(sl)):
                     # Ensure we don't go out of bounds
                     if assignment_idx >= len(assignment_indices):
-                        raise ValueError(
+                        msg = (
                             f"Assignment index {assignment_idx} exceeds number of assignments "
                             f"({len(assignment_indices)}). This indicates a mismatch between "
-                            "streamlines and assignments.",
+                            "streamlines and assignments."
                         )
+                        raise ValueError(msg)  # noqa: TRY301
                     # Get the color for this point's assigned segment
                     seg_idx = assignment_indices[assignment_idx]
                     # Ensure index is within bounds
@@ -3877,10 +3879,11 @@ class TractographyVisualizer:
 
             # Final validation: ensure we processed all assignments
             if assignment_idx != len(assignment_indices):
-                raise ValueError(
+                msg = (
                     f"Processed {assignment_idx} points but have {len(assignment_indices)} assignments. "
-                    "This indicates a mismatch between streamlines and assignments.",
+                    "This indicates a mismatch between streamlines and assignments."
                 )
+                raise ValueError(msg)  # noqa: TRY301
 
             # Debug: Show sample of assignments and colors for first streamline (after point_colors is created)
             point_idx = 0

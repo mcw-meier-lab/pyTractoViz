@@ -1768,7 +1768,10 @@ class TestVisualizeBundleAssignment:
         mock_load_trk.side_effect = [mock_tract, mock_atlas_tract]
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = mock_stateful_tractogram.streamlines
-        mock_assignment_map.return_value = np.array([0, 1, 0])
+        # assignment_map returns one assignment per point
+        # mock_stateful_tractogram has 3 streamlines with 3 points each = 9 total points
+        # So we need 9 assignments
+        mock_assignment_map.return_value = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0])
 
         mock_scene = Mock()
         mock_scene_class.return_value = mock_scene
@@ -1887,6 +1890,7 @@ class TestRunQualityCheckWorkflow:
     """Test run_quality_check_workflow method."""
 
     @patch("pytractoviz.viz.create_quality_check_html")
+    @patch("pytractoviz.viz.load_trk")
     @patch.object(TractographyVisualizer, "visualize_bundle_assignment")
     @patch.object(TractographyVisualizer, "visualize_shape_similarity")
     @patch.object(TractographyVisualizer, "plot_afq")
@@ -1905,17 +1909,24 @@ class TestRunQualityCheckWorkflow:
         mock_plot_afq: Mock,
         mock_shape_sim: Mock,
         mock_bundle: Mock,
+        mock_load_trk: Mock,
         _mock_html: Mock,
         visualizer: TractographyVisualizer,
         mock_tract_file: Path,
         mock_t1w_file: Path,  # Keep fixture name, but unused in test
         tmp_dir: Path,
+        mock_stateful_tractogram: Mock,
     ) -> None:
         """Test basic quality check workflow."""
         _ = mock_t1w_file  # Mark as intentionally unused
         subjects_original: dict[str, dict[str, str | Path]] = {
             "sub-001": {"AF_L": mock_tract_file},
         }
+
+        # Mock load_trk for initial metrics loading
+        mock_tract = Mock()
+        mock_tract.streamlines = mock_stateful_tractogram.streamlines
+        mock_load_trk.return_value = mock_tract
 
         # Mock return values
         mock_anatomical.return_value = {"coronal": tmp_dir / "coronal.png"}
