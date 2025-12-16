@@ -4527,6 +4527,8 @@ class TractographyVisualizer:
             if "cci" not in skip_checks:
                 try:
                     # Calculate CCI to get metrics
+                    cci_values = None
+                    keep_tract = None
                     try:
                         tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
                         tract.to_rasmm()
@@ -4545,21 +4547,30 @@ class TractographyVisualizer:
                         else:
                             metrics["cci_after_filter_count"] = 0
                             missing_data.append("CCI: No streamlines after filtering")
-                        del tract, cci_values, keep_tract
+                        # Delete tract after calc_cci, but keep cci_values and keep_tract for plotting
+                        del tract
                         gc.collect()
                     except (OSError, ValueError, RuntimeError, InvalidInputError, TractographyVisualizationError) as e:
                         logger.warning("Failed to calculate CCI metrics: %s", e)
                         errors.append(f"CCI metrics calculation failed: {e!s}")
 
-                    cci_plots = self.plot_cci(
-                        tract_file,  # type: ignore[arg-type]
-                        output_dir=tract_output_dir,
-                        ref_img=subject_ref_img,
-                        **subject_merged_kwargs,
-                    )
-                    # Add CCI plots to results
-                    for plot_type, plot_path in cci_plots.items():
-                        tract_results[f"cci_{plot_type}"] = plot_path
+                    # Plot CCI if we have valid data
+                    if cci_values is not None and keep_tract is not None and len(cci_values) > 0:
+                        hist_file = tract_output_dir / "cci_histogram.png"
+                        cci_plots = self.plot_cci(
+                            cci_values,
+                            keep_tract,
+                            hist_file,
+                            ref_img=subject_ref_img,
+                            output_dir=tract_output_dir,
+                            **subject_merged_kwargs,
+                        )
+                        # Add CCI plots to results
+                        for plot_type, plot_path in cci_plots.items():
+                            tract_results[f"cci_{plot_type}"] = plot_path
+                        # Clean up after plotting
+                        del cci_values, keep_tract
+                        gc.collect()
                 except (OSError, ValueError, RuntimeError, MemoryError) as e:
                     error_msg = str(e).lower()
                     if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
