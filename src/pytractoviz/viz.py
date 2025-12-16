@@ -2242,6 +2242,10 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         bins: int = 100,
+        max_streamlines: int | None = None,
+        subsample_factor: float | None = None,
+        max_points_per_streamline: int | None = None,
+        resample_streamlines: bool = False,
     ) -> dict[str, Path]:
         """Plot CCI with anatomical views.
 
@@ -2271,6 +2275,18 @@ class TractographyVisualizer:
             Whether to show the glass brain outline. Default is True.
         bins : int, optional
             Number of bins for histogram. Default is 100.
+        max_streamlines : int | None, optional
+            Maximum number of streamlines to keep. If None, no limit.
+            Useful for reducing memory usage with large tractograms.
+        subsample_factor : float | None, optional
+            Fraction of streamlines to keep (0-1). If None, no subsampling.
+            Useful for reducing memory usage with large tractograms.
+        max_points_per_streamline : int | None, optional
+            Maximum points per streamline. Streamlines exceeding this will be resampled.
+            Useful for reducing memory usage with very long streamlines.
+        resample_streamlines : bool, optional
+            Whether to resample all streamlines using approx_polygon_track.
+            Useful for reducing memory usage by reducing points per streamline.
 
         Returns
         -------
@@ -2374,6 +2390,53 @@ class TractographyVisualizer:
                     "Tract has 0 streamlines after CCI filtering. Skipping visualization.",
                 )
                 return {}
+
+            # Filter streamlines and CCI array together if requested (to avoid VTK segfaults)
+            # We need to filter them together to maintain correspondence
+            original_streamline_count = len(tract_streamlines)
+            if max_streamlines is not None and len(tract_streamlines) > max_streamlines:
+                # Randomly subsample to max_streamlines, keeping CCI aligned
+                indices_array = np.random.choice(
+                    len(tract_streamlines),
+                    size=max_streamlines,
+                    replace=False,
+                )
+                indices = sorted(indices_array.tolist())  # Keep original order
+                tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
+                cci = cci[indices]
+                logger.info(
+                    "Subsampled streamlines from %d to %d (max_streamlines=%d)",
+                    original_streamline_count,
+                    len(tract_streamlines),
+                    max_streamlines,
+                )
+            elif subsample_factor is not None and 0 < subsample_factor < 1:
+                # Subsample by factor, keeping CCI aligned
+                n_keep = int(len(tract_streamlines) * subsample_factor)
+                if n_keep < len(tract_streamlines):
+                    indices_array = np.random.choice(
+                        len(tract_streamlines),
+                        size=n_keep,
+                        replace=False,
+                    )
+                    indices = sorted(indices_array.tolist())  # Keep original order
+                    tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
+                    cci = cci[indices]
+                    logger.info(
+                        "Subsampled streamlines from %d to %d (factor=%.2f)",
+                        original_streamline_count,
+                        len(tract_streamlines),
+                        subsample_factor,
+                    )
+
+            # Apply point-level filtering (doesn't affect streamline count, so CCI stays aligned)
+            tract_streamlines = self._filter_streamlines(
+                tract_streamlines,
+                max_streamlines=None,  # Already filtered above
+                subsample_factor=None,  # Already filtered above
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+            )
 
             # Validate CCI array matches tract (critical for memory safety)
             if len(cci) != len(tract_streamlines):
