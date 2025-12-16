@@ -1708,11 +1708,11 @@ class TestCompareBeforeAfterCCI:
 
         # Mock Image operations
         # Create a function that returns a mock image each time Image.open is called
-        def create_mock_image(*args, **kwargs):
+        def create_mock_image(*_args: Any, **_kwargs: Any) -> Mock:
             mock_img = Mock()
             mock_img.close = Mock()
             return mock_img
-        
+
         mock_combined_img = Mock()
         mock_image.open.side_effect = create_mock_image
         mock_image.new.return_value = mock_combined_img
