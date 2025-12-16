@@ -4,6 +4,8 @@ line-length = 120
 [lint]
 exclude = [
     "tests/fixtures/*.py",
+    "scripts/run_rounds.py",
+    "scripts/config_example.json",
 ]
 select = [
     "A", "ANN", "ARG",
