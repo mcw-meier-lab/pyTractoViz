@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -52,6 +52,16 @@ def mock_nibabel_image() -> Mock:
     mock_img = Mock(spec=nib.Nifti1Image)
     mock_img.get_fdata.return_value = np.random.rand(100, 100, 100)
     mock_img.affine = np.eye(4)
+    # Add header that supports subscripting for StatefulTractogram
+    # The header needs to support header["dim"][1:4] access
+    # Use MagicMock to support subscripting
+    mock_header = MagicMock(spec=nib.Nifti1Header)
+    mock_header.get_best_affine.return_value = np.eye(4)
+    # Create dim array that will be returned when accessing header["dim"]
+    dim_array = np.array([3, 100, 100, 100, 1, 1, 1, 1], dtype=np.int16)
+    # Configure MagicMock to return dim_array when subscripted with "dim"
+    mock_header.__getitem__.return_value = dim_array
+    mock_img.header = mock_header
     return mock_img
 
 
@@ -508,7 +518,6 @@ class TestLoadTract:
 class TestCalcCCI:
     """Test calc_cci method."""
 
-    @pytest.mark.xfail(reason="Mocking cluster_confidence return value for numpy array boolean indexing is complex")
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.cluster_confidence")
     @patch("pytractoviz.viz.length")
@@ -531,10 +540,9 @@ class TestCalcCCI:
         )
         mock_stateful_tractogram.streamlines = long_streamlines
         mock_length.return_value = [50.0, 50.0]
-        # Set return_value to a numpy array - this should work
+        # Use side_effect to return numpy array directly - supports boolean indexing
         cci_array = np.array([1.5, 2.0], dtype=np.float64)
-        # Use return_value - Mock should return this when called
-        mock_cluster_confidence.return_value = cci_array
+        mock_cluster_confidence.side_effect = lambda x: cci_array
         mock_nib_load.return_value = mock_nibabel_image
 
         cci_values, _ = visualizer.calc_cci(mock_stateful_tractogram)
@@ -571,7 +579,6 @@ class TestCalcCCI:
         with pytest.raises(InvalidInputError, match="No streamlines longer than"):
             visualizer.calc_cci(mock_stateful_tractogram)
 
-    @pytest.mark.xfail(reason="Mocking cluster_confidence return value for numpy array boolean indexing is complex")
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.cluster_confidence")
     @patch("pytractoviz.viz.length")
@@ -595,9 +602,9 @@ class TestCalcCCI:
         mock_stateful_tractogram.streamlines = long_streamlines
         mock_length.return_value = [50.0, 50.0, 50.0]
         # Only first two above threshold (1.0)
-        # Use return_value - Mock should return this when called
+        # Use side_effect to return numpy array directly - supports boolean indexing
         cci_array = np.array([1.5, 2.0, 0.5], dtype=np.float64)
-        mock_cluster_confidence.return_value = cci_array
+        mock_cluster_confidence.side_effect = lambda x: cci_array
         mock_nib_load.return_value = mock_nibabel_image
 
         cci_values, _ = visualizer.calc_cci(mock_stateful_tractogram)
@@ -1647,7 +1654,7 @@ class TestVisualizeShapeSimilarity:
 class TestCompareBeforeAfterCCI:
     """Test compare_before_after_cci method."""
 
-    @pytest.mark.xfail(reason="Mocking cluster_confidence return value for numpy array boolean indexing is complex")
+    @patch("pytractoviz.viz.Image")
     @patch("pytractoviz.viz.window.record")
     @patch("pytractoviz.viz.window.Scene")
     @patch("pytractoviz.viz.actor.line")
@@ -1666,11 +1673,11 @@ class TestCompareBeforeAfterCCI:
         _mock_actor_line: Mock,
         mock_scene_class: Mock,
         _mock_record: Mock,
+        mock_image: Mock,
         visualizer: TractographyVisualizer,
         mock_tract_file: Path,
         mock_t1w_file: Path,
         tmp_dir: Path,
-        _mock_stateful_tractogram: Mock,
         mock_nibabel_image: Mock,
     ) -> None:
         """Test successful before/after CCI comparison."""
@@ -1683,13 +1690,14 @@ class TestCompareBeforeAfterCCI:
         )
         mock_tract = Mock()
         mock_tract.streamlines = long_streamlines
+        mock_tract.to_rasmm = Mock()  # Add to_rasmm method
         mock_load_trk.return_value = mock_tract
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = long_streamlines
         mock_length.return_value = [50.0, 50.0]
-        # Return a numpy array that supports boolean indexing
+        # Use side_effect to return numpy array directly - supports boolean indexing
         cci_array = np.array([1.5, 2.0], dtype=np.float64)
-        mock_cluster_confidence.return_value = cci_array
+        mock_cluster_confidence.side_effect = lambda x: cci_array
 
         # Create filtered tractogram
         mock_filtered_tract = Mock(spec=StatefulTractogram)
@@ -1697,6 +1705,20 @@ class TestCompareBeforeAfterCCI:
 
         mock_scene = Mock()
         mock_scene_class.return_value = mock_scene
+
+        # Mock Image operations
+        # Create a function that returns a mock image each time Image.open is called
+        def create_mock_image(*args, **kwargs):
+            mock_img = Mock()
+            mock_img.close = Mock()
+            return mock_img
+        
+        mock_combined_img = Mock()
+        mock_image.open.side_effect = create_mock_image
+        mock_image.new.return_value = mock_combined_img
+        # Ensure combined image has required methods
+        mock_combined_img.paste = Mock()
+        mock_combined_img.save = Mock()
 
         result = visualizer.compare_before_after_cci(
             mock_tract_file,
