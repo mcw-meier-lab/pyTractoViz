@@ -42,7 +42,7 @@ Issues = "https://github.com/mcw-meier-lab/pytractoviz/issues"
 Discussions = "https://github.com/mcw-meier-lab/pytractoviz/discussions"
 
 [project.scripts]
-pytractoviz = "pytractoviz.cli:main"
+pytractoviz = "pytractoviz._internal.cli:main"
 
 [tool.pdm.version]
 source = "call"
