@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import csv
 import json
 import os
 from pathlib import Path
@@ -60,27 +61,23 @@ def create_quality_check_html(
     # Convert file paths to relative paths for HTML
     html_dir = Path(output_file).parent
     data_processed: dict[str, dict[str, dict[str, str]]] = {}
-    summary_data: list[dict[str, Any]] = []  # For summary table
+    missing_data_info: dict[str, list[dict[str, Any]]] = {}  # Track missing data per subject
 
     for subject_id, tracts in data.items():
         data_processed[subject_id] = {}
+        missing_data_info[subject_id] = []
         for tract_name, media in tracts.items():
             data_processed[subject_id][tract_name] = {}
-            metrics_dict = {}
-            errors_list = []
             missing_data_list = []
 
             for media_type, file_path in media.items():
-                # Extract metrics, errors, and missing_data
-                if media_type == "_metrics":
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        metrics_dict = json.loads(file_path)
-                elif media_type == "_errors":
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        errors_list = json.loads(file_path)
-                elif media_type == "_missing_data":
-                    with contextlib.suppress(json.JSONDecodeError, TypeError):
-                        missing_data_list = json.loads(file_path)
+                # Extract missing_data (metrics and errors are not used in HTML display)
+                if media_type == "_missing_data":
+                    if isinstance(file_path, list):
+                        missing_data_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            missing_data_list = json.loads(file_path)
                 # Handle numeric scores (like shape_similarity_score)
                 elif isinstance(file_path, (int, float)):
                     data_processed[subject_id][tract_name][media_type] = str(file_path)
@@ -96,20 +93,21 @@ def create_quality_check_html(
                     # Store as-is if it's a string but file doesn't exist (might be a score string)
                     data_processed[subject_id][tract_name][media_type] = file_path
 
-            # Add to summary data
-            summary_data.append(
-                {
-                    "subject": subject_id,
-                    "tract": tract_name,
-                    "metrics": metrics_dict,
-                    "errors": errors_list,
-                    "missing_data": missing_data_list,
-                },
-            )
+            # Track missing data for display (after processing all media types for this tract)
+            if missing_data_list:
+                missing_data_info[subject_id].append(
+                    {
+                        "tract": tract_name,
+                        "missing": missing_data_list,
+                    },
+                )
 
     # Extract unique subjects and tracts for filters
     subjects = sorted(data_processed.keys())
     tract_names: list[str] = sorted({tract for tracts_dict in data_processed.values() for tract in tracts_dict})
+
+    # Check if this is a single-subject report
+    is_single_subject = len(subjects) == 1
 
     # Generate HTML
     html_content = f"""<!DOCTYPE html>
@@ -604,20 +602,44 @@ def create_quality_check_html(
     <div class="header">
         <h1>{title}</h1>
         <div class="stats">
-            <span id="total-items">{len(subjects)} subjects x {len(tract_names)} tracts</span> |
+            <span id="total-items">{
+        f"{len(tract_names)} tract" + ("s" if len(tract_names) != 1 else "")
+        if is_single_subject
+        else f"{len(subjects)} subjects x {len(tract_names)} tracts"
+    }</span> |
             <span id="filtered-count">Showing all items</span>
         </div>
     </div>
 
+    {
+        "".join(
+            f'''
+    <div class="missing-data-alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem 1.5rem; margin: 1rem 2rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem 0; color: #856404; font-size: 1.1rem;">⚠️ Missing Data</h3>
+        <p style="margin: 0 0 0.5rem 0; color: #856404;">The following tract(s) have missing data:</p>
+        <ul style="margin: 0; padding-left: 1.5rem; color: #856404;">
+            {"".join(f"<li><strong>{item['tract']}</strong>: {'; '.join(str(m) for m in item['missing'])}</li>" for item in missing_data_info[subject_id])}
+        </ul>
+    </div>
+    '''
+            for subject_id in subjects
+            if missing_data_info.get(subject_id)
+        )
+    }
+
     <div class="controls">
         <div class="controls-grid">
-            <div class="control-group">
+            {
+        "<!-- Subject filter hidden for single-subject report -->"
+        if is_single_subject
+        else f'''<div class="control-group">
                 <label for="subject-filter">Filter by Subject</label>
                 <select id="subject-filter">
                     <option value="">All Subjects</option>
                     {"".join(f'<option value="{s}">{s}</option>' for s in subjects)}
                 </select>
-            </div>
+            </div>'''
+    }
             <div class="control-group">
                 <label for="tract-filter">Filter by Tract</label>
                 <select id="tract-filter">
@@ -627,7 +649,9 @@ def create_quality_check_html(
             </div>
             <div class="control-group">
                 <label for="search">Search</label>
-                <input type="text" id="search" placeholder="Search subject or tract...">
+                <input type="text" id="search" placeholder="{
+        "Search tract..." if is_single_subject else "Search subject or tract..."
+    }">
             </div>
         </div>
         <div class="pagination">
@@ -639,44 +663,12 @@ def create_quality_check_html(
         </div>
     </div>
 
-    <div class="tabs">
-        <div class="tab-buttons">
-            <button class="tab-button active" data-tab="visualizations">Visualizations</button>
-            <button class="tab-button" data-tab="summary">Summary</button>
-        </div>
-    </div>
-
     <div id="visualizations-tab" class="tab-content active">
         <div class="grid-container">
             <div class="grid" id="items-grid"></div>
             <div class="no-results" id="no-results" style="display: none;">
                 <h3>No items found</h3>
                 <p>Try adjusting your filters or search terms</p>
-            </div>
-        </div>
-    </div>
-
-    <div id="summary-tab" class="tab-content">
-        <div class="summary-section">
-            <h2>Summary Table: Metrics, Errors, and Missing Data</h2>
-            <div class="summary-table-container">
-                <table class="summary-table">
-                    <thead>
-                        <tr>
-                            <th>Subject</th>
-                            <th>Tract</th>
-                            <th>Initial Streamlines</th>
-                            <th>After CCI Filter</th>
-                            <th>CCI Mean</th>
-                            <th>CCI Median</th>
-                            <th>Shape Similarity</th>
-                            <th>Errors</th>
-                            <th>Missing Data</th>
-                        </tr>
-                    </thead>
-                    <tbody id="summary-table-body">
-                    </tbody>
-                </table>
             </div>
         </div>
     </div>
@@ -693,7 +685,6 @@ def create_quality_check_html(
 
     <script>
         const data = {json.dumps(data_processed)};
-        const summaryData = {json.dumps(summary_data)};
         const itemsPerPage = {items_per_page};
 
         let currentPage = 1;
@@ -727,7 +718,8 @@ def create_quality_check_html(
         }}
 
         function filterData() {{
-            const subjectFilter = document.getElementById('subject-filter').value;
+            const subjectFilterEl = document.getElementById('subject-filter');
+            const subjectFilter = subjectFilterEl ? subjectFilterEl.value : '';
             const tractFilter = document.getElementById('tract-filter').value;
             const searchTerm = document.getElementById('search').value.toLowerCase();
 
@@ -735,8 +727,8 @@ def create_quality_check_html(
                 const matchSubject = !subjectFilter || item.subject === subjectFilter;
                 const matchTract = !tractFilter || item.tract === tractFilter;
                 const matchSearch = !searchTerm ||
-                    item.subject.toLowerCase().includes(searchTerm) ||
-                    item.tract.toLowerCase().includes(searchTerm);
+                    item.tract.toLowerCase().includes(searchTerm) ||
+                    (subjectFilterEl && item.subject.toLowerCase().includes(searchTerm));
                 return matchSubject && matchTract && matchSearch;
             }});
 
@@ -1005,7 +997,10 @@ def create_quality_check_html(
         }}
 
         // Event listeners
-        document.getElementById('subject-filter').addEventListener('change', filterData);
+        const subjectFilterEl = document.getElementById('subject-filter');
+        if (subjectFilterEl) {{
+            subjectFilterEl.addEventListener('change', filterData);
+        }}
         document.getElementById('tract-filter').addEventListener('change', filterData);
         document.getElementById('search').addEventListener('input', filterData);
         document.getElementById('prev-page').addEventListener('click', () => {{
@@ -1030,71 +1025,7 @@ def create_quality_check_html(
             if (e.target.id === 'modal') closeModal();
         }});
 
-        function renderSummaryTable() {{
-            const tbody = document.getElementById('summary-table-body');
-            tbody.innerHTML = summaryData.map(item => {{
-                const metrics = item.metrics || {{}};
-                const errors = item.errors || [];
-                const missing = item.missing_data || [];
-
-                const formatValue = (val) => {{
-                    if (val === null || val === undefined) return '<span class="no-data">N/A</span>';
-                    if (typeof val === 'number') {{
-                        if (val % 1 === 0) return val.toString();
-                        return val.toFixed(3);
-                    }}
-                    return val;
-                }};
-
-                const errorsHtml = errors.length > 0
-                    ? errors.map(e => `<div class="error-cell">${{e}}</div>`).join('')
-                    : '<span class="no-data">None</span>';
-
-                const missingHtml = missing.length > 0
-                    ? missing.map(m => `<div class="missing-cell">${{m}}</div>`).join('')
-                    : '<span class="no-data">None</span>';
-
-                return `
-                    <tr>
-                        <td>${{item.subject}}</td>
-                        <td>${{item.tract}}</td>
-                        <td class="metric-value">${{formatValue(metrics.initial_streamline_count)}}</td>
-                        <td class="metric-value">${{formatValue(metrics.cci_after_filter_count)}}</td>
-                        <td class="metric-value">${{formatValue(metrics.cci_mean)}}</td>
-                        <td class="metric-value">${{formatValue(metrics.cci_median)}}</td>
-                        <td class="metric-value">${{formatValue(metrics.shape_similarity_score)}}</td>
-                        <td>${{errorsHtml}}</td>
-                        <td>${{missingHtml}}</td>
-                    </tr>
-                `;
-            }}).join('');
-        }}
-
-        function switchTab(tabName) {{
-            // Hide all tabs
-            document.querySelectorAll('.tab-content').forEach(tab => {{
-                tab.classList.remove('active');
-            }});
-            document.querySelectorAll('.tab-button').forEach(btn => {{
-                btn.classList.remove('active');
-            }});
-
-            // Show selected tab
-            document.getElementById(tabName + '-tab').classList.add('active');
-            // Activate the clicked button
-            document.querySelector(`[data-tab="${{tabName}}"]`).classList.add('active');
-        }}
-
-        // Add click handlers to tab buttons
-        document.querySelectorAll('.tab-button').forEach(button => {{
-            button.addEventListener('click', function() {{
-                const tabName = this.getAttribute('data-tab');
-                switchTab(tabName);
-            }});
-        }});
-
         // Initialize
-        renderSummaryTable();
         filterData();
     </script>
 </body>
@@ -1103,3 +1034,97 @@ def create_quality_check_html(
     # Write HTML file
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(html_content)
+
+
+def create_summary_csv(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str | Path,
+) -> None:
+    """Create a CSV file with summary metrics for all subjects and tracts.
+
+    Parameters
+    ----------
+    data : dict
+        Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+        Same format as create_quality_check_html.
+    output_file : str | Path
+        Path where the CSV file will be saved.
+
+    Notes
+    -----
+    The CSV includes the following columns:
+    - Subject: Subject ID
+    - Tract: Tract name
+    - Initial Streamlines: Count before CCI filtering
+    - After CCI Filter: Count after CCI filtering
+    - CCI Mean: Mean CCI value
+    - CCI Median: Median CCI value
+    - Shape Similarity: Shape similarity score
+    - Errors: List of errors (semicolon-separated)
+    - Missing Data: List of missing data items (semicolon-separated)
+    """
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Collect summary data from all subjects
+    summary_rows: list[dict[str, Any]] = []
+
+    for subject_id, tracts in data.items():
+        for tract_name, media in tracts.items():
+            metrics_dict = {}
+            errors_list = []
+            missing_data_list = []
+
+            for media_type, file_path in media.items():
+                # Extract metrics, errors, and missing_data
+                if media_type == "_metrics":
+                    if isinstance(file_path, dict):
+                        metrics_dict = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            metrics_dict = json.loads(file_path)
+                elif media_type == "_errors":
+                    if isinstance(file_path, list):
+                        errors_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            errors_list = json.loads(file_path)
+                elif media_type == "_missing_data":
+                    if isinstance(file_path, list):
+                        missing_data_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            missing_data_list = json.loads(file_path)
+
+            # Create row for this subject/tract combination
+            row = {
+                "Subject": subject_id,
+                "Tract": tract_name,
+                "Initial Streamlines": metrics_dict.get("initial_streamline_count", ""),
+                "After CCI Filter": metrics_dict.get("cci_after_filter_count", ""),
+                "CCI Mean": metrics_dict.get("cci_mean", ""),
+                "CCI Median": metrics_dict.get("cci_median", ""),
+                "Shape Similarity": metrics_dict.get("shape_similarity_score", ""),
+                "Errors": "; ".join(str(e) for e in errors_list) if errors_list else "",
+                "Missing Data": "; ".join(str(m) for m in missing_data_list) if missing_data_list else "",
+            }
+            summary_rows.append(row)
+
+    # Write CSV file
+    if summary_rows:
+        fieldnames = [
+            "Subject",
+            "Tract",
+            "Initial Streamlines",
+            "After CCI Filter",
+            "CCI Mean",
+            "CCI Median",
+            "Shape Similarity",
+            "Errors",
+            "Missing Data",
+        ]
+
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(summary_rows)

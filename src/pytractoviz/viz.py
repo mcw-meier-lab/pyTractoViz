@@ -47,7 +47,7 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 from xvfbwrapper import Xvfb
 
-from pytractoviz.html import create_quality_check_html
+from pytractoviz.html import create_quality_check_html, create_summary_csv
 from pytractoviz.utils import (
     ANATOMICAL_VIEW_ANGLES,
     calculate_bbox_size,
@@ -5082,8 +5082,17 @@ class TractographyVisualizer:
             Output directory for generated files. If None, uses the output
             directory set during initialization.
         html_output : str | Path | None, optional
-            Path for the HTML report file. If None, creates "quality_check_report.html"
-            in the output directory.
+            Path for the HTML report file(s). Individual reports are generated per subject.
+            Options:
+            - None: Creates "{subject_id}_quality_check_report.html" for each subject
+              in the output directory.
+            - Directory path: Creates "{subject_id}_quality_check_report.html" for each
+              subject in the specified directory.
+            - File path: If the path contains "{subject}" or "{SUBJECT}" placeholder,
+              it will be replaced with the subject ID. Otherwise, the subject ID will
+              be prepended to the filename (e.g., "report.html" becomes "sub-001_report.html").
+            Example: "reports/{subject}_qc.html" will create "reports/sub-001_qc.html",
+            "reports/sub-002_qc.html", etc.
         skip_checks : list[str] | None, optional
             List of quality checks to skip. Valid options:
             - "anatomical_views": Skip standard anatomical views
@@ -5557,37 +5566,131 @@ class TractographyVisualizer:
                     for _ in range(2):
                         gc.collect()
 
-            # Generate HTML report
-            html_output = output_dir / "quality_check_report.html" if html_output is None else Path(html_output)
+        # Generate HTML reports (one per subject) - after all processing is complete
+        if html_output is None:
+            html_output_dir = output_dir
+            html_output_template = None
+        else:
+            html_output_path = Path(html_output)
+            # If html_output is a directory, use it as the output directory
+            if html_output_path.is_dir() or (not html_output_path.exists() and html_output_path.suffix == ""):
+                html_output_dir = html_output_path
+                html_output_template = None
+            else:
+                # If html_output is a file path, use its parent as directory and name as template
+                html_output_dir = html_output_path.parent
+                html_output_template = html_output_path.stem
 
-        # Convert Path objects to strings for HTML function
-        results_for_html: dict[str, dict[str, dict[str, str]]] = {}
+        # Generate individual HTML reports per subject
+        html_files_generated = []
         for subject_id, subject_tracts in results.items():
-            results_for_html[subject_id] = {}
+            # Convert Path objects to strings for HTML function for this subject only
+            subject_results_for_html: dict[str, dict[str, dict[str, str]]] = {
+                subject_id: {},
+            }
             if isinstance(subject_tracts, dict):
                 for tract_name, media_dict in subject_tracts.items():
-                    results_for_html[subject_id][tract_name] = {}
+                    subject_results_for_html[subject_id][tract_name] = {}
                     if isinstance(media_dict, dict):
                         for media_type, file_path in media_dict.items():
                             # Convert Path to string, or keep as string/number
                             if isinstance(file_path, Path):
-                                results_for_html[subject_id][tract_name][media_type] = str(file_path)
+                                subject_results_for_html[subject_id][tract_name][media_type] = str(file_path)
                             else:
-                                results_for_html[subject_id][tract_name][media_type] = str(file_path)
+                                subject_results_for_html[subject_id][tract_name][media_type] = str(file_path)
 
+            # Determine output file path for this subject
+            # Ensure output directory exists
+            html_output_dir.mkdir(parents=True, exist_ok=True)
+
+            if html_output_template:
+                # Use template: replace {subject} placeholder or prepend subject_id
+                if "{subject}" in html_output_template or "{SUBJECT}" in html_output_template:
+                    # Replace placeholder with subject_id
+                    template_with_subject = html_output_template.replace("{subject}", subject_id).replace(
+                        "{SUBJECT}",
+                        subject_id,
+                    )
+                    subject_html_file = html_output_dir / f"{template_with_subject}.html"
+                else:
+                    # No placeholder found, prepend subject_id to filename
+                    subject_html_file = html_output_dir / f"{subject_id}_{html_output_template}.html"
+            else:
+                # Default: subject_id_quality_check_report.html
+                subject_html_file = html_output_dir / f"{subject_id}_quality_check_report.html"
+
+            # Generate HTML report
+            try:
+                create_quality_check_html(
+                    subject_results_for_html,
+                    str(subject_html_file),
+                    title=f"Tractography Quality Check Report - {subject_id}",
+                )
+                html_files_generated.append(subject_html_file)
+                logger.info("Quality check report generated for %s: %s", subject_id, subject_html_file)
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.warning("Failed to generate HTML report for %s: %s", subject_id, e)
+
+            # Generate JSON results file for this subject
+            # Determine JSON file path (same location and naming pattern as HTML, but with .json extension)
+            subject_json_file = subject_html_file.with_suffix(".json")
+            try:
+                # Convert Path objects to strings for JSON serialization
+                # Use Any for values since they can be strings, numbers, or Path objects
+                subject_results_for_json: dict[str, dict[str, dict[str, Any]]] = {
+                    subject_id: {},
+                }
+                if isinstance(subject_tracts, dict):
+                    for tract_name, media_dict in subject_tracts.items():
+                        subject_results_for_json[subject_id][tract_name] = {}
+                        if isinstance(media_dict, dict):
+                            for media_type, file_path in media_dict.items():
+                                # Convert Path to string, or keep as string/number
+                                if isinstance(file_path, Path):
+                                    subject_results_for_json[subject_id][tract_name][media_type] = str(file_path)
+                                elif isinstance(file_path, (int, float)):
+                                    # Keep numeric values as-is (JSON can handle them)
+                                    subject_results_for_json[subject_id][tract_name][media_type] = file_path
+                                else:
+                                    subject_results_for_json[subject_id][tract_name][media_type] = str(file_path)
+
+                # Write JSON file
+                with open(subject_json_file, "w", encoding="utf-8") as f:
+                    json.dump(subject_results_for_json, f, indent=2, ensure_ascii=False)
+                logger.info("Results JSON generated for %s: %s", subject_id, subject_json_file)
+            except (OSError, ValueError, TypeError, RuntimeError) as e:
+                logger.warning("Failed to generate JSON results for %s: %s", subject_id, e)
+            finally:
+                # Clean up subject HTML conversion dictionary after use
+                del subject_results_for_html
+                gc.collect()
+
+        if html_files_generated:
+            logger.info("Generated %d individual subject report(s)", len(html_files_generated))
+
+        # Generate CSV summary file with all subjects' data
+        csv_output_file = html_output_dir / "quality_check_summary.csv"
         try:
-            create_quality_check_html(
-                results_for_html,
-                str(html_output),
-                title="Tractography Quality Check Report",
-            )
-            logger.info("Quality check report generated: %s", html_output)
+            # Convert all results to format expected by CSV function
+            all_results_for_csv: dict[str, dict[str, dict[str, str]]] = {}
+            for subject_id, subject_tracts in results.items():
+                all_results_for_csv[subject_id] = {}
+                if isinstance(subject_tracts, dict):
+                    for tract_name, media_dict in subject_tracts.items():
+                        all_results_for_csv[subject_id][tract_name] = {}
+                        if isinstance(media_dict, dict):
+                            for media_type, file_path in media_dict.items():
+                                # Convert Path to string, or keep as string/number
+                                if isinstance(file_path, Path):
+                                    all_results_for_csv[subject_id][tract_name][media_type] = str(file_path)
+                                else:
+                                    all_results_for_csv[subject_id][tract_name][media_type] = str(file_path)
+
+            create_summary_csv(all_results_for_csv, str(csv_output_file))
+            logger.info("Summary CSV generated: %s", csv_output_file)
         except (OSError, ValueError, RuntimeError) as e:
-            logger.warning("Failed to generate HTML report: %s", e)
-        finally:
-            # Clean up HTML conversion dictionary after use
-            del results_for_html
-            gc.collect()
+            logger.warning("Failed to generate summary CSV: %s", e)
+
         # Stop XVFB if it was started
         if vdisplay is not None:
             logger.info("Stopping XVFB")
