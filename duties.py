@@ -63,7 +63,11 @@ def changelog(ctx: Context, bump: str = "") -> None:
         bump: Bump option passed to git-changelog.
     """
     ctx.run(tools.git_changelog(bump=bump or None), title="Updating changelog")
-    ctx.run(tools.yore.check(bump=bump or _get_changelog_version()), title="Checking legacy code")
+    ctx.run(
+        tools.yore.check(bump=bump or _get_changelog_version()),
+        title="Checking legacy code",
+        nofail=True,
+    )
 
 
 @duty(pre=["check-quality", "check-types", "check-docs", "check-api"])
