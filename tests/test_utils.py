@@ -14,7 +14,7 @@ except ImportError:
     pytest.skip("Required dependencies (numpy, dipy, fury) not available", allow_module_level=True)
 
 from pytractoviz.utils import (
-    ANATOMICAL_VIEW_ANGLES,
+    ANATOMICAL_VIEW_NAMES,
     calculate_bbox_size,
     calculate_centroid,
     calculate_combined_bbox_size,
@@ -52,37 +52,26 @@ def empty_streamlines() -> Streamlines:
     return Streamlines([])
 
 
-class TestAnatomicalViewAngles:
-    """Test ANATOMICAL_VIEW_ANGLES constant."""
+class TestAnatomicalViewNames:
+    """Test ANATOMICAL_VIEW_NAMES constant."""
 
-    def test_anatomical_view_angles_exists(self) -> None:
-        """Test that ANATOMICAL_VIEW_ANGLES is defined."""
-        assert ANATOMICAL_VIEW_ANGLES is not None
-        assert isinstance(ANATOMICAL_VIEW_ANGLES, dict)
+    def test_anatomical_view_names_exists(self) -> None:
+        """Test that ANATOMICAL_VIEW_NAMES is defined."""
+        assert ANATOMICAL_VIEW_NAMES is not None
+        assert isinstance(ANATOMICAL_VIEW_NAMES, tuple)
 
-    def test_anatomical_view_angles_keys(self) -> None:
-        """Test that all expected view keys exist."""
-        expected_keys = {"coronal", "axial", "sagittal"}
-        assert set(ANATOMICAL_VIEW_ANGLES.keys()) == expected_keys
+    def test_anatomical_view_names_keys(self) -> None:
+        """Test that all expected view names exist."""
+        expected = ("coronal", "axial", "sagittal")
+        assert expected == ANATOMICAL_VIEW_NAMES
 
-    def test_anatomical_view_angles_values(self) -> None:
-        """Test that view angles have correct structure."""
-        for _, angles in ANATOMICAL_VIEW_ANGLES.items():
-            assert isinstance(angles, tuple)
-            assert len(angles) == 3
-            assert all(isinstance(angle, float) for angle in angles)
-
-    def test_coronal_angles(self) -> None:
-        """Test coronal view angles."""
-        assert ANATOMICAL_VIEW_ANGLES["coronal"] == (-90.0, 0.0, 0.0)
-
-    def test_axial_angles(self) -> None:
-        """Test axial view angles."""
-        assert ANATOMICAL_VIEW_ANGLES["axial"] == (0.0, 180.0, 0.0)
-
-    def test_sagittal_angles(self) -> None:
-        """Test sagittal view angles."""
-        assert ANATOMICAL_VIEW_ANGLES["sagittal"] == (-90.0, 0.0, 90.0)
+    def test_anatomical_view_names_membership(self) -> None:
+        """Test that view names are strings and valid."""
+        for name in ANATOMICAL_VIEW_NAMES:
+            assert isinstance(name, str)
+        assert "coronal" in ANATOMICAL_VIEW_NAMES
+        assert "axial" in ANATOMICAL_VIEW_NAMES
+        assert "sagittal" in ANATOMICAL_VIEW_NAMES
 
 
 class TestCalculateCentroid:
@@ -479,3 +468,44 @@ class TestSetAnatomicalCamera:
         assert position[0] < centroid[0]  # -X
         assert np.isclose(position[1], centroid[1])
         assert np.isclose(position[2], centroid[2])
+
+    def test_set_anatomical_camera_mni_template_space(self, mock_scene: Mock) -> None:
+        """Test that template_space='mni' flips camera positions for MNI convention."""
+        centroid = np.array([0, 0, 0])
+        camera_distance = 200.0
+
+        # MNI coronal: camera from +Y (anterior)
+        set_anatomical_camera(
+            mock_scene,
+            centroid,
+            "coronal",
+            camera_distance=camera_distance,
+            template_space="mni",
+        )
+        call_kwargs = mock_scene.set_camera.call_args[1]
+        position = call_kwargs["position"]
+        assert position[1] > centroid[1]  # +Y
+
+        # MNI axial: camera from -Z (inferior)
+        set_anatomical_camera(
+            mock_scene,
+            centroid,
+            "axial",
+            camera_distance=camera_distance,
+            template_space="mni",
+        )
+        call_kwargs = mock_scene.set_camera.call_args[1]
+        position = call_kwargs["position"]
+        assert position[2] > centroid[2]  # +Z
+
+        # MNI sagittal: camera from +X (right)
+        set_anatomical_camera(
+            mock_scene,
+            centroid,
+            "sagittal",
+            camera_distance=camera_distance,
+            template_space="mni",
+        )
+        call_kwargs = mock_scene.set_camera.call_args[1]
+        position = call_kwargs["position"]
+        assert position[0] > centroid[0]  # +X

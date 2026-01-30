@@ -189,10 +189,10 @@ class TestTractographyVisualizerBasicMethods:
         """Test output_directory property."""
         assert visualizer.output_directory == tmp_dir
 
-    def test_extract_tract_name(self, visualizer: TractographyVisualizer) -> None:
-        """Test _extract_tract_name method."""
-        assert visualizer._extract_tract_name("path/to/tract.trk") == "tract"
-        assert visualizer._extract_tract_name(Path("path/to/tract.trk")) == "tract"
+    def test_tract_name_from_path_stem(self) -> None:
+        """Test that tract name is derived from Path.stem for output filenames."""
+        assert Path("path/to/tract.trk").stem == "tract"
+        assert Path("other/subject_AF_L.trk").stem == "subject_AF_L"
 
 
 class TestGetGlassBrain:
@@ -521,73 +521,98 @@ class TestCalcCCI:
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.cluster_confidence")
     @patch("pytractoviz.viz.length")
+    @patch("pytractoviz.viz.load_trk")
     def test_calc_cci_success(
         self,
+        mock_load_trk: Mock,
         mock_length: Mock,
         mock_cluster_confidence: Mock,
         mock_nib_load: Mock,
         visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
         mock_stateful_tractogram: Mock,
         mock_nibabel_image: Mock,
     ) -> None:
         """Test successful CCI calculation."""
-        # Create streamlines with sufficient length
         long_streamlines = Streamlines(
             [
-                np.array([[0, 0, 0], [50, 0, 0]]),  # Length > 40
-                np.array([[0, 0, 0], [0, 50, 0]]),  # Length > 40
+                np.array([[0, 0, 0], [50, 0, 0]]),
+                np.array([[0, 0, 0], [0, 50, 0]]),
             ],
         )
         mock_stateful_tractogram.streamlines = long_streamlines
+        mock_stateful_tractogram.to_rasmm = Mock()
+        mock_load_trk.return_value = mock_stateful_tractogram
         mock_length.return_value = [50.0, 50.0]
-        # Use side_effect to return numpy array directly - supports boolean indexing
         cci_array = np.array([1.5, 2.0], dtype=np.float64)
         mock_cluster_confidence.side_effect = lambda x: cci_array
         mock_nib_load.return_value = mock_nibabel_image
 
-        cci_values, _ = visualizer.calc_cci(mock_stateful_tractogram)
-        assert isinstance(cci_values, np.ndarray)
-        assert len(cci_values) == 2
-        assert all(cci >= visualizer.cci_threshold for cci in cci_values)
+        cci, keep_cci, keep_tract, long_sl = visualizer.calc_cci(mock_tract_file)
+        assert isinstance(cci, np.ndarray)
+        assert len(cci) == 2
+        assert isinstance(keep_cci, np.ndarray)
+        assert all(c >= visualizer.cci_threshold for c in keep_cci)
+        assert isinstance(keep_tract, StatefulTractogram) or hasattr(keep_tract, "streamlines")
+        assert len(long_sl) == 2
+        mock_load_trk.assert_called_once()
         mock_length.assert_called_once()
         mock_cluster_confidence.assert_called_once()
 
-    def test_calc_cci_empty_tractogram(self, visualizer: TractographyVisualizer) -> None:
-        """Test calc_cci with empty tractogram."""
+    @patch("pytractoviz.viz.load_trk")
+    def test_calc_cci_empty_tractogram(
+        self,
+        mock_load_trk: Mock,
+        visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
+        mock_t1w_file: Path,
+    ) -> None:
+        """Test calc_cci with empty tractogram (no long streamlines)."""
         mock_tract = Mock(spec=StatefulTractogram)
         mock_tract.streamlines = Streamlines()
-        with pytest.raises(InvalidInputError, match="Tractogram is empty"):
-            visualizer.calc_cci(mock_tract)
+        mock_tract.to_rasmm = Mock()
+        mock_load_trk.return_value = mock_tract
+        with pytest.raises(InvalidInputError, match="No streamlines longer than"):
+            visualizer.calc_cci(mock_tract_file, ref_img=mock_t1w_file)
 
+    @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.length")
+    @patch("pytractoviz.viz.load_trk")
     def test_calc_cci_no_long_streamlines(
         self,
+        mock_load_trk: Mock,
         mock_length: Mock,
+        _mock_nib_load: Mock,
         visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
         mock_stateful_tractogram: Mock,
     ) -> None:
         """Test calc_cci with no streamlines longer than threshold."""
-        # Set up streamlines that are too short
         short_streamlines = Streamlines(
             [
-                np.array([[0, 0, 0], [10, 0, 0]]),  # Length < 40
-                np.array([[0, 0, 0], [20, 0, 0]]),  # Length < 40
+                np.array([[0, 0, 0], [10, 0, 0]]),
+                np.array([[0, 0, 0], [20, 0, 0]]),
             ],
         )
         mock_stateful_tractogram.streamlines = short_streamlines
-        mock_length.return_value = [10.0, 20.0]  # All below threshold
+        mock_stateful_tractogram.to_rasmm = Mock()
+        mock_load_trk.return_value = mock_stateful_tractogram
+        mock_length.return_value = [10.0, 20.0]
         with pytest.raises(InvalidInputError, match="No streamlines longer than"):
-            visualizer.calc_cci(mock_stateful_tractogram)
+            visualizer.calc_cci(mock_tract_file)
 
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.cluster_confidence")
     @patch("pytractoviz.viz.length")
+    @patch("pytractoviz.viz.load_trk")
     def test_calc_cci_filters_by_threshold(
         self,
+        mock_load_trk: Mock,
         mock_length: Mock,
         mock_cluster_confidence: Mock,
         mock_nib_load: Mock,
         visualizer: TractographyVisualizer,
+        mock_tract_file: Path,
         mock_stateful_tractogram: Mock,
         mock_nibabel_image: Mock,
     ) -> None:
@@ -600,17 +625,19 @@ class TestCalcCCI:
             ],
         )
         mock_stateful_tractogram.streamlines = long_streamlines
+        mock_stateful_tractogram.to_rasmm = Mock()
+        mock_load_trk.return_value = mock_stateful_tractogram
         mock_length.return_value = [50.0, 50.0, 50.0]
-        # Only first two above threshold (1.0)
-        # Use side_effect to return numpy array directly - supports boolean indexing
         cci_array = np.array([1.5, 2.0, 0.5], dtype=np.float64)
         mock_cluster_confidence.side_effect = lambda x: cci_array
         mock_nib_load.return_value = mock_nibabel_image
 
-        cci_values, _ = visualizer.calc_cci(mock_stateful_tractogram)
-        assert isinstance(cci_values, np.ndarray)
-        assert len(cci_values) == 2
-        assert all(cci >= visualizer.cci_threshold for cci in cci_values)
+        cci, keep_cci, _kt, _long_sl = visualizer.calc_cci(mock_tract_file)
+        assert isinstance(cci, np.ndarray)
+        assert len(cci) == 3
+        assert isinstance(keep_cci, np.ndarray)
+        assert len(keep_cci) == 2
+        assert all(c >= visualizer.cci_threshold for c in keep_cci)
 
 
 class TestWeightedAFQ:
@@ -936,216 +963,6 @@ class TestGenerateAtlasViews:
         assert isinstance(views, dict)
         # Check that output files use custom name
         assert all("custom_atlas_atlas" in str(path) for path in views.values())
-
-
-class TestPlotCCI:
-    """Test plot_cci method."""
-
-    @patch("pytractoviz.viz.window.record")
-    @patch("pytractoviz.viz.window.Scene")
-    @patch("pytractoviz.viz.actor.scalar_bar")
-    @patch("pytractoviz.viz.actor.colormap_lookup_table")
-    @patch("pytractoviz.viz.actor.line")
-    @patch("pytractoviz.viz.transform_streamlines")
-    @patch("pytractoviz.viz.nib.load")
-    @patch("pytractoviz.viz.plt.subplots")
-    @patch("pytractoviz.viz.plt.close")
-    def test_plot_cci_success(
-        self,
-        _mock_plt_close: Mock,
-        mock_subplots: Mock,
-        mock_nib_load: Mock,
-        mock_transform: Mock,
-        _mock_actor_line: Mock,
-        _mock_lut: Mock,
-        _mock_scalar_bar: Mock,
-        mock_scene_class: Mock,
-        _mock_record: Mock,
-        visualizer: TractographyVisualizer,
-        mock_t1w_file: Path,
-        tmp_dir: Path,
-        mock_stateful_tractogram: Mock,
-        mock_nibabel_image: Mock,
-    ) -> None:
-        """Test successful CCI plotting."""
-        # Create mock CCI array and tractogram
-        cci_array = np.array([1.5, 2.0, 1.8])
-        mock_tract = Mock(spec=StatefulTractogram)
-        mock_tract.streamlines = mock_stateful_tractogram.streamlines
-        mock_nib_load.return_value = mock_nibabel_image
-        mock_transform.return_value = mock_stateful_tractogram.streamlines
-
-        # Mock matplotlib
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-
-        # Mock scene
-        mock_scene = Mock()
-        mock_scene_class.return_value = mock_scene
-
-        hist_file = tmp_dir / "cci_hist.png"
-
-        views = visualizer.plot_cci(
-            cci_array,
-            mock_tract,
-            hist_file,
-            ref_img=mock_t1w_file,
-            output_dir=tmp_dir,
-        )
-        assert isinstance(views, dict)
-        assert "histogram" in views
-        assert "coronal" in views
-        assert "axial" in views
-        assert "sagittal" in views
-
-    def test_plot_cci_empty_array(
-        self,
-        visualizer: TractographyVisualizer,
-        mock_t1w_file: Path,
-        tmp_dir: Path,
-        mock_stateful_tractogram: Mock,
-    ) -> None:
-        """Test plot_cci with empty CCI array."""
-        cci_array = np.array([])
-        mock_tract = Mock(spec=StatefulTractogram)
-        mock_tract.streamlines = mock_stateful_tractogram.streamlines
-
-        with pytest.raises(InvalidInputError, match="CCI array is empty"):
-            visualizer.plot_cci(
-                cci_array,
-                mock_tract,
-                tmp_dir / "hist.png",
-                ref_img=mock_t1w_file,
-                output_dir=tmp_dir,
-            )
-
-    @patch("pytractoviz.viz.window.record")
-    @patch("pytractoviz.viz.window.Scene")
-    @patch("pytractoviz.viz.actor.scalar_bar")
-    @patch("pytractoviz.viz.actor.colormap_lookup_table")
-    @patch("pytractoviz.viz.actor.line")
-    @patch("pytractoviz.viz.transform_streamlines")
-    @patch("pytractoviz.viz.nib.load")
-    @patch("pytractoviz.viz.plt.subplots")
-    @patch("pytractoviz.viz.plt.close")
-    def test_plot_cci_specific_views(
-        self,
-        _mock_plt_close: Mock,
-        mock_subplots: Mock,
-        mock_nib_load: Mock,
-        mock_transform: Mock,
-        _mock_actor_line: Mock,
-        _mock_lut: Mock,
-        _mock_scalar_bar: Mock,
-        mock_scene_class: Mock,
-        _mock_record: Mock,
-        visualizer: TractographyVisualizer,
-        mock_t1w_file: Path,
-        tmp_dir: Path,
-        mock_stateful_tractogram: Mock,
-        mock_nibabel_image: Mock,
-    ) -> None:
-        """Test plot_cci with specific views only."""
-        cci_array = np.array([1.5, 2.0, 1.8])
-        mock_tract = Mock(spec=StatefulTractogram)
-        mock_tract.streamlines = mock_stateful_tractogram.streamlines
-        mock_nib_load.return_value = mock_nibabel_image
-        mock_transform.return_value = mock_stateful_tractogram.streamlines
-
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-        mock_scene = Mock()
-        mock_scene_class.return_value = mock_scene
-
-        hist_file = tmp_dir / "cci_hist.png"
-
-        views = visualizer.plot_cci(
-            cci_array,
-            mock_tract,
-            hist_file,
-            ref_img=mock_t1w_file,
-            output_dir=tmp_dir,
-            views=["coronal", "axial"],
-        )
-        assert isinstance(views, dict)
-        assert "histogram" in views
-        assert "coronal" in views
-        assert "axial" in views
-        assert "sagittal" not in views
-
-    def test_plot_cci_no_output_dir(
-        self,
-        visualizer: TractographyVisualizer,
-        mock_t1w_file: Path,
-        mock_stateful_tractogram: Mock,
-    ) -> None:
-        """Test plot_cci without output directory."""
-        visualizer._output_directory = None
-        cci_array = np.array([1.5, 2.0])
-        mock_tract = Mock(spec=StatefulTractogram)
-        mock_tract.streamlines = mock_stateful_tractogram.streamlines
-
-        with pytest.raises(InvalidInputError, match="No output directory provided"):
-            visualizer.plot_cci(
-                cci_array,
-                mock_tract,
-                "hist.png",
-                ref_img=mock_t1w_file,
-            )
-
-    @patch("pytractoviz.viz.window.record")
-    @patch("pytractoviz.viz.window.Scene")
-    @patch("pytractoviz.viz.actor.scalar_bar")
-    @patch("pytractoviz.viz.actor.colormap_lookup_table")
-    @patch("pytractoviz.viz.actor.line")
-    @patch("pytractoviz.viz.transform_streamlines")
-    @patch("pytractoviz.viz.nib.load")
-    @patch("pytractoviz.viz.plt.subplots")
-    @patch("pytractoviz.viz.plt.close")
-    def test_plot_cci_length_mismatch(
-        self,
-        _mock_plt_close: Mock,
-        mock_subplots: Mock,
-        mock_nib_load: Mock,
-        mock_transform: Mock,
-        _mock_actor_line: Mock,
-        _mock_lut: Mock,
-        _mock_scalar_bar: Mock,
-        mock_scene_class: Mock,
-        _mock_record: Mock,
-        visualizer: TractographyVisualizer,
-        mock_t1w_file: Path,
-        tmp_dir: Path,
-        mock_stateful_tractogram: Mock,
-        mock_nibabel_image: Mock,
-    ) -> None:
-        """Test plot_cci with CCI array length mismatch."""
-        # CCI array has different length than streamlines
-        cci_array = np.array([1.5, 2.0])  # 2 values
-        mock_tract = Mock(spec=StatefulTractogram)
-        # But streamlines has 3 items
-        mock_tract.streamlines = mock_stateful_tractogram.streamlines
-        mock_nib_load.return_value = mock_nibabel_image
-        mock_transform.return_value = mock_stateful_tractogram.streamlines
-
-        mock_fig = Mock()
-        mock_ax = Mock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-        mock_scene = Mock()
-        mock_scene_class.return_value = mock_scene
-
-        hist_file = tmp_dir / "cci_hist.png"
-
-        with pytest.raises(InvalidInputError, match=r"CCI array length.*does not match"):
-            visualizer.plot_cci(
-                cci_array,
-                mock_tract,
-                hist_file,
-                ref_img=mock_t1w_file,
-                output_dir=tmp_dir,
-            )
 
 
 class TestPlotAFQ:
@@ -1652,73 +1469,52 @@ class TestVisualizeShapeSimilarity:
 
 
 class TestCompareBeforeAfterCCI:
-    """Test compare_before_after_cci method."""
+    """Test compare_before_after_cci method (histogram + before/after CCI views)."""
 
-    @patch("pytractoviz.viz.Image")
+    @patch("pytractoviz.viz.plt.close")
+    @patch("pytractoviz.viz.plt.subplots")
     @patch("pytractoviz.viz.window.record")
     @patch("pytractoviz.viz.window.Scene")
     @patch("pytractoviz.viz.actor.line")
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
-    @patch("pytractoviz.viz.load_trk")
-    @patch("pytractoviz.viz.length")
-    @patch("pytractoviz.viz.cluster_confidence")
+    @patch.object(TractographyVisualizer, "calc_cci")
     def test_compare_before_after_cci_success(
         self,
-        mock_cluster_confidence: Mock,
-        mock_length: Mock,
-        mock_load_trk: Mock,
+        mock_calc_cci: Mock,
         mock_nib_load: Mock,
         mock_transform: Mock,
         _mock_actor_line: Mock,
         mock_scene_class: Mock,
         _mock_record: Mock,
-        mock_image: Mock,
+        mock_subplots: Mock,
+        _mock_plt_close: Mock,
         visualizer: TractographyVisualizer,
         mock_tract_file: Path,
         mock_t1w_file: Path,
         tmp_dir: Path,
         mock_nibabel_image: Mock,
     ) -> None:
-        """Test successful before/after CCI comparison."""
-        # Create streamlines with sufficient length
+        """Test successful before/after CCI comparison (histogram + CCI-colored views)."""
         long_streamlines = Streamlines(
             [
-                np.array([[0, 0, 0], [50, 0, 0]]),  # Length > 40
-                np.array([[0, 0, 0], [0, 50, 0]]),  # Length > 40
+                np.array([[0, 0, 0], [50, 0, 0]]),
+                np.array([[0, 0, 0], [0, 50, 0]]),
             ],
         )
-        mock_tract = Mock()
-        mock_tract.streamlines = long_streamlines
-        mock_tract.to_rasmm = Mock()  # Add to_rasmm method
-        mock_load_trk.return_value = mock_tract
+        cci_full = np.array([1.5, 2.0], dtype=np.float64)
+        keep_cci = np.array([2.0], dtype=np.float64)
+        mock_filtered_tract = Mock(spec=StatefulTractogram)
+        mock_filtered_tract.streamlines = Streamlines([long_streamlines[1]])
+        mock_calc_cci.return_value = (cci_full, keep_cci, mock_filtered_tract, long_streamlines)
+
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = long_streamlines
-        mock_length.return_value = [50.0, 50.0]
-        # Use side_effect to return numpy array directly - supports boolean indexing
-        cci_array = np.array([1.5, 2.0], dtype=np.float64)
-        mock_cluster_confidence.side_effect = lambda x: cci_array
-
-        # Create filtered tractogram
-        mock_filtered_tract = Mock(spec=StatefulTractogram)
-        mock_filtered_tract.streamlines = long_streamlines
-
+        mock_fig = Mock()
+        mock_ax = Mock()
+        mock_subplots.return_value = (mock_fig, mock_ax)
         mock_scene = Mock()
         mock_scene_class.return_value = mock_scene
-
-        # Mock Image operations
-        # Create a function that returns a mock image each time Image.open is called
-        def create_mock_image(*_args: Any, **_kwargs: Any) -> Mock:
-            mock_img = Mock()
-            mock_img.close = Mock()
-            return mock_img
-
-        mock_combined_img = Mock()
-        mock_image.open.side_effect = create_mock_image
-        mock_image.new.return_value = mock_combined_img
-        # Ensure combined image has required methods
-        mock_combined_img.paste = Mock()
-        mock_combined_img.save = Mock()
 
         result = visualizer.compare_before_after_cci(
             mock_tract_file,
@@ -1726,7 +1522,15 @@ class TestCompareBeforeAfterCCI:
             output_dir=tmp_dir,
         )
         assert isinstance(result, dict)
+        assert "histogram" in result
+        assert result["histogram"] == tmp_dir / "tract_cci_histogram.png"
         assert "coronal" in result or "axial" in result or "sagittal" in result
+
+        any_view_key = "coronal" if "coronal" in result else next(iter(k for k in result if k != "histogram"))
+        any_view = result[any_view_key]
+        assert isinstance(any_view, dict)
+        assert "before" in any_view
+        assert "after" in any_view
 
     def test_compare_before_after_cci_no_output_dir(
         self,
@@ -1763,6 +1567,7 @@ class TestVisualizeBundleAssignment:
     @patch("pytractoviz.viz.window.Scene")
     @patch("pytractoviz.viz.actor.line")
     @patch("pytractoviz.viz.assignment_map")
+    @patch.object(TractographyVisualizer, "_downsample_streamlines")
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.load_trk")
@@ -1771,6 +1576,7 @@ class TestVisualizeBundleAssignment:
         mock_load_trk: Mock,
         mock_nib_load: Mock,
         mock_transform: Mock,
+        mock_downsample_streamlines: Mock,
         mock_assignment_map: Mock,
         _mock_actor_line: Mock,
         mock_scene_class: Mock,
@@ -1790,9 +1596,10 @@ class TestVisualizeBundleAssignment:
         mock_load_trk.side_effect = [mock_tract, mock_atlas_tract]
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = mock_stateful_tractogram.streamlines
+        # Return streamlines unchanged so point count matches assignment count
+        mock_downsample_streamlines.side_effect = lambda sl: sl
         # assignment_map returns one assignment per point
         # mock_stateful_tractogram has 3 streamlines with 3 points each = 9 total points
-        # So we need 9 assignments
         mock_assignment_map.return_value = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0])
 
         mock_scene = Mock()
@@ -1917,7 +1724,6 @@ class TestRunQualityCheckWorkflow:
     @patch.object(TractographyVisualizer, "visualize_shape_similarity")
     @patch.object(TractographyVisualizer, "plot_afq")
     @patch.object(TractographyVisualizer, "compare_before_after_cci")
-    @patch.object(TractographyVisualizer, "plot_cci")
     @patch.object(TractographyVisualizer, "calc_cci")
     @patch.object(TractographyVisualizer, "generate_atlas_views")
     @patch.object(TractographyVisualizer, "generate_anatomical_views")
@@ -1926,7 +1732,6 @@ class TestRunQualityCheckWorkflow:
         mock_anatomical: Mock,
         mock_atlas: Mock,
         mock_calc_cci: Mock,
-        mock_plot_cci: Mock,
         mock_compare_cci: Mock,
         mock_plot_afq: Mock,
         mock_shape_sim: Mock,
@@ -1950,12 +1755,27 @@ class TestRunQualityCheckWorkflow:
         mock_tract.streamlines = mock_stateful_tractogram.streamlines
         mock_load_trk.return_value = mock_tract
 
-        # Mock return values
+        # Mock return values (calc_cci returns 4 values; compare_before_after_cci returns histogram + views)
+        mock_calc_cci.return_value = (
+            np.array([1.5, 2.0]),
+            np.array([2.0]),
+            Mock(),
+            Mock(spec=Streamlines),
+        )
+        mock_compare_cci.return_value = {
+            "histogram": tmp_dir / "AF_L_cci_histogram.png",
+            "coronal": {
+                "before": tmp_dir / "cci_before_AF_L_coronal.png",
+                "after": tmp_dir / "cci_after_AF_L_coronal.png",
+            },
+            "axial": {"before": tmp_dir / "cci_before_AF_L_axial.png", "after": tmp_dir / "cci_after_AF_L_axial.png"},
+            "sagittal": {
+                "before": tmp_dir / "cci_before_AF_L_sagittal.png",
+                "after": tmp_dir / "cci_after_AF_L_sagittal.png",
+            },
+        }
         mock_anatomical.return_value = {"coronal": tmp_dir / "coronal.png"}
         mock_atlas.return_value = {"coronal": tmp_dir / "atlas_coronal.png"}
-        mock_calc_cci.return_value = (np.array([1.5, 2.0]), Mock())
-        mock_plot_cci.return_value = {"coronal": tmp_dir / "cci_coronal.png"}
-        mock_compare_cci.return_value = {"comparison_image": tmp_dir / "compare.png"}
         mock_plot_afq.return_value = tmp_dir / "afq.png"
         mock_shape_sim.return_value = {"similarity_score": 0.85, "image": tmp_dir / "shape.png"}
         mock_bundle.return_value = {"image": tmp_dir / "bundle.png"}
@@ -2028,7 +1848,7 @@ class TestViewTractInteractive:
     @patch("pytractoviz.viz.calculate_direction_colors")
     @patch.object(TractographyVisualizer, "_set_anatomical_camera")
     @patch.object(TractographyVisualizer, "_create_streamline_actor")
-    @patch.object(TractographyVisualizer, "_filter_streamlines")
+    @patch.object(TractographyVisualizer, "_downsample_streamlines")
     @patch.object(TractographyVisualizer, "_create_scene")
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
@@ -2039,7 +1859,7 @@ class TestViewTractInteractive:
         mock_nib_load: Mock,
         mock_transform: Mock,
         mock_create_scene: Mock,
-        mock_filter_streamlines: Mock,
+        mock_downsample_streamlines: Mock,
         mock_create_actor: Mock,
         mock_set_camera: Mock,
         mock_calc_colors: Mock,
@@ -2059,7 +1879,7 @@ class TestViewTractInteractive:
         mock_load_trk.return_value = mock_tract
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = mock_stateful_tractogram.streamlines
-        mock_filter_streamlines.return_value = mock_stateful_tractogram.streamlines
+        mock_downsample_streamlines.return_value = mock_stateful_tractogram.streamlines
         mock_calc_colors.return_value = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
         mock_calc_centroid.return_value = np.array([0, 0, 0])
         mock_calc_bbox.return_value = np.array([100, 100, 100])
@@ -2075,7 +1895,7 @@ class TestViewTractInteractive:
         mock_load_trk.assert_called_once()
         mock_nib_load.assert_called_once()
         mock_transform.assert_called_once()
-        mock_filter_streamlines.assert_called_once()
+        mock_downsample_streamlines.assert_called_once()
         mock_create_scene.assert_called_once()
         mock_create_actor.assert_called_once()
         mock_scene.add.assert_called_once_with(mock_actor)
@@ -2122,7 +1942,7 @@ class TestViewTractInteractive:
     @patch("pytractoviz.viz.calculate_direction_colors")
     @patch.object(TractographyVisualizer, "_set_anatomical_camera")
     @patch.object(TractographyVisualizer, "_create_streamline_actor")
-    @patch.object(TractographyVisualizer, "_filter_streamlines")
+    @patch.object(TractographyVisualizer, "_downsample_streamlines")
     @patch.object(TractographyVisualizer, "_create_scene")
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
@@ -2133,7 +1953,7 @@ class TestViewTractInteractive:
         mock_nib_load: Mock,
         mock_transform: Mock,
         mock_create_scene: Mock,
-        mock_filter_streamlines: Mock,
+        mock_downsample_streamlines: Mock,
         mock_create_actor: Mock,
         mock_set_camera: Mock,
         mock_calc_colors: Mock,
@@ -2152,7 +1972,7 @@ class TestViewTractInteractive:
         mock_load_trk.return_value = mock_tract
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = mock_stateful_tractogram.streamlines
-        mock_filter_streamlines.return_value = mock_stateful_tractogram.streamlines
+        mock_downsample_streamlines.return_value = mock_stateful_tractogram.streamlines
         mock_calc_colors.return_value = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
         mock_calc_centroid.return_value = np.array([0, 0, 0])
         mock_calc_bbox.return_value = np.array([100, 100, 100])
@@ -2178,7 +1998,7 @@ class TestViewTractInteractive:
     @patch("pytractoviz.viz.calculate_direction_colors")
     @patch.object(TractographyVisualizer, "_set_anatomical_camera")
     @patch.object(TractographyVisualizer, "_create_streamline_actor")
-    @patch.object(TractographyVisualizer, "_filter_streamlines")
+    @patch.object(TractographyVisualizer, "_downsample_streamlines")
     @patch.object(TractographyVisualizer, "_create_scene")
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
@@ -2189,7 +2009,7 @@ class TestViewTractInteractive:
         mock_nib_load: Mock,
         mock_transform: Mock,
         mock_create_scene: Mock,
-        mock_filter_streamlines: Mock,
+        mock_downsample_streamlines: Mock,
         mock_create_actor: Mock,
         mock_set_camera: Mock,
         mock_calc_colors: Mock,
@@ -2208,7 +2028,7 @@ class TestViewTractInteractive:
         mock_load_trk.return_value = mock_tract
         mock_nib_load.return_value = mock_nibabel_image
         mock_transform.return_value = mock_stateful_tractogram.streamlines
-        mock_filter_streamlines.return_value = mock_stateful_tractogram.streamlines
+        mock_downsample_streamlines.return_value = mock_stateful_tractogram.streamlines
         mock_calc_colors.return_value = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
         mock_calc_centroid.return_value = np.array([0, 0, 0])
         mock_calc_bbox.return_value = np.array([100, 100, 100])

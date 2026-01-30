@@ -10,11 +10,10 @@ import multiprocessing
 import os
 import resource
 import sys
-import tempfile
 import tracemalloc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 try:
     import psutil
@@ -38,18 +37,18 @@ from dipy.tracking.streamline import (
     Streamlines,
     cluster_confidence,
     orient_by_streamline,
+    set_number_of_points,
     transform_streamlines,
 )
 from dipy.tracking.utils import length
 from fury import actor, window
 from fury.colormap import create_colormap
-from PIL import Image
 from scipy.spatial.transform import Rotation
 from xvfbwrapper import Xvfb
 
 from pytractoviz.html import create_quality_check_html, create_summary_csv
 from pytractoviz.utils import (
-    ANATOMICAL_VIEW_ANGLES,
+    ANATOMICAL_VIEW_NAMES,
     calculate_bbox_size,
     calculate_centroid,
     calculate_combined_bbox_size,
@@ -897,6 +896,7 @@ class TractographyVisualizer:
         *,
         camera_distance: float | None = None,
         bbox_size: np.ndarray | None = None,
+        template_space: Literal["ras", "mni"] = "ras",
     ) -> None:
         """Set camera position for standard anatomical views.
 
@@ -914,6 +914,9 @@ class TractographyVisualizer:
             Distance of camera from centroid. If None, calculated from bbox_size.
         bbox_size : np.ndarray | None, optional
             Bounding box size of streamlines. Used to calculate camera_distance if not provided.
+        template_space : str, optional
+            "ras" for standard templates, "mni" for MNI-space (different camera sides).
+            Default is "ras".
 
         Raises
         ------
@@ -927,6 +930,7 @@ class TractographyVisualizer:
                 view_name,
                 camera_distance=camera_distance,
                 bbox_size=bbox_size,
+                template_space=template_space,
             )
         except ValueError as e:
             raise InvalidInputError(str(e)) from e
@@ -1046,131 +1050,49 @@ class TractographyVisualizer:
                 )
             raise
 
-    def _filter_streamlines(
+    def _downsample_streamlines(
         self,
         streamlines: Streamlines,
         *,
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
+        set_points: int | None = None,
+        approx_points: float | None = 0.25,
     ) -> Streamlines:
-        """Filter and resample streamlines to reduce memory usage.
+        """Downsample streamlines to reduce memory usage.
 
         Parameters
         ----------
         streamlines : Streamlines
             The streamlines to filter.
-        max_streamlines : int | None, optional
-            Maximum number of streamlines to keep. If None, no limit.
-        subsample_factor : float | None, optional
-            Fraction of streamlines to keep (0-1). If None, no subsampling.
-        max_points_per_streamline : int | None, optional
-            Maximum points per streamline. Streamlines exceeding this will be resampled.
-        resample_streamlines : bool, optional
-            Whether to resample all streamlines using approx_polygon_track.
+        set_points: int
+            A set number of points per streamline. (Uses DIPY's set_number_of_points).
+        approx_points: float, optional
+            Reduce the number of points so that there are more points
+            in curvy regions and less points in less curvy regions.
+            (Uses DIPY's approx_polygon_track).
 
         Returns
         -------
         Streamlines
-            Filtered and/or resampled streamlines.
+            Downsampled streamlines.
         """
-        filtered = streamlines
-        original_count = len(filtered)
+        n_pts = sum([len(streamline) for streamline in streamlines])
 
-        # Subsample streamlines if requested
-        if max_streamlines is not None and len(filtered) > max_streamlines:
-            # Randomly subsample to max_streamlines
-            indices_array = np.random.choice(
-                len(filtered),
-                size=max_streamlines,
-                replace=False,
-            )
-            indices = sorted(indices_array.tolist())  # Keep original order
-            filtered = Streamlines([filtered[i] for i in indices])
-            logger.info(
-                "Subsampled streamlines from %d to %d (max_streamlines=%d)",
-                original_count,
-                len(filtered),
-                max_streamlines,
-            )
-        elif subsample_factor is not None and 0 < subsample_factor < 1:
-            # Subsample by factor
-            n_keep = int(len(filtered) * subsample_factor)
-            if n_keep < len(filtered):
-                indices_array = np.random.choice(
-                    len(filtered),
-                    size=n_keep,
-                    replace=False,
-                )
-                indices = sorted(indices_array.tolist())  # Keep original order
-                filtered = Streamlines([filtered[i] for i in indices])
-                logger.info(
-                    "Subsampled streamlines from %d to %d (factor=%.2f)",
-                    original_count,
-                    len(filtered),
-                    subsample_factor,
-                )
+        # Downsample using set_number_of points
+        if set_points is not None:
+            downsampled = set_number_of_points(streamlines, nb_points=set_points)
+            n_pts_ds = sum([len(s) for s in downsampled])
+        elif approx_points is not None:
+            downsampled = [approx_polygon_track(s, approx_points) for s in streamlines]
+            n_pts_ds = sum([len(s) for s in downsampled])
 
-        # Resample streamlines to reduce points if requested
-        if resample_streamlines:
-            # Use approx_polygon_track to reduce points while preserving shape
-            resampled = Streamlines()
-            total_points_before = sum(len(sl) for sl in filtered)
-            for sl in filtered:
-                resampled_sl = approx_polygon_track(sl, 0.25)
-                resampled.append(resampled_sl)
-            filtered = resampled
-            total_points_after = sum(len(sl) for sl in filtered)
-            logger.info(
-                "Resampled streamlines: %d total points -> %d total points (reduction: %.1f%%)",
-                total_points_before,
-                total_points_after,
-                (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
-            )
-        elif max_points_per_streamline is not None:
-            # Resample only streamlines that exceed the limit
-            resampled = Streamlines()
-            total_points_before = sum(len(sl) for sl in filtered)
-            resampled_count = 0
-            for sl in filtered:
-                if len(sl) > max_points_per_streamline:
-                    # Resample to max_points_per_streamline by evenly spacing points
-                    indices_array = np.linspace(0, len(sl) - 1, max_points_per_streamline, dtype=int)
-                    sl_array = np.array(sl)
-                    resampled_sl = sl_array[indices_array].tolist()
-                    resampled.append(resampled_sl)
-                    resampled_count += 1
-                else:
-                    resampled.append(sl)
-            filtered = resampled
-            total_points_after = sum(len(sl) for sl in filtered)
-            if resampled_count > 0:
-                logger.info(
-                    "Resampled %d streamlines exceeding %d points: %d total points -> %d total points (reduction: %.1f%%)",
-                    resampled_count,
-                    max_points_per_streamline,
-                    total_points_before,
-                    total_points_after,
-                    (1 - total_points_after / total_points_before) * 100 if total_points_before > 0 else 0,
-                )
+        logger.info(
+            "Downsampled streamlines: %d points -> %d points (reduction: %.1f%%)",
+            n_pts,
+            n_pts_ds,
+            (1 - n_pts_ds / n_pts) * 100 if n_pts > 0 else 0,
+        )
 
-        return filtered
-
-    def _extract_tract_name(self, tract_file: str | Path) -> str:
-        """Extract tract name from file path (without extension).
-
-        Parameters
-        ----------
-        tract_file : str | Path
-            Path to tractography file.
-
-        Returns
-        -------
-        str
-            Tract name without extension.
-        """
-        return Path(tract_file).stem
+        return Streamlines(downsampled)
 
     def load_tract(
         self,
@@ -1321,25 +1243,27 @@ class TractographyVisualizer:
 
     def calc_cci(
         self,
-        tract: StatefulTractogram,
+        tract_file: str | Path,
         ref_img: str | Path | None = None,
-    ) -> tuple[np.ndarray, StatefulTractogram]:
+    ) -> tuple[np.ndarray, np.ndarray, StatefulTractogram, Streamlines]:
         """Calculate Cluster Confidence Index (CCI) for tractography.
 
         Parameters
         ----------
-        tract : StatefulTractogram
-            The tractography data.
+        tract_file : str | Path
+            Path to the tractography file.
         ref_img : str | Path | None, optional
             Path to the reference image. If None, uses the reference image
             set during initialization or via `set_reference_image()`.
 
         Returns
         -------
-        tuple[np.ndarray, StatefulTractogram]
+        tuple[np.ndarray, np.ndarray, StatefulTractogram, Streamlines]
             A tuple containing:
-            - CCI values as a numpy array
-            - Filtered tractogram with streamlines above threshold
+            - CCI values for all long streamlines (one per streamline).
+            - CCI values above threshold (aligned with kept streamlines).
+            - Filtered tractogram with streamlines above threshold.
+            - Long streamlines used for CCI (length > min_streamline_length).
 
         Raises
         ------
@@ -1349,8 +1273,8 @@ class TractographyVisualizer:
         TractographyVisualizationError
             If calculation fails.
         """
-        if not tract.streamlines or len(tract.streamlines) == 0:
-            raise InvalidInputError("Tractogram is empty.")
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
 
         if ref_img is None:
             if self._reference_image is None:
@@ -1394,7 +1318,7 @@ class TractographyVisualizer:
                 f"Failed to calculate CCI: {e}",
             ) from e
         else:
-            return keep_cci, keep_tract
+            return cci, keep_cci, keep_tract, long_streamlines
 
     def generate_anatomical_views(
         self,
@@ -1405,11 +1329,8 @@ class TractographyVisualizer:
         output_dir: str | Path | None = None,
         figure_size: tuple[int, int] | None = None,
         show_glass_brain: bool = True,
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
         flip_lr: bool = False,
+        overwrite: bool = False,
     ) -> dict[str, Path]:
         """Generate snapshots from standard anatomical views.
 
@@ -1433,26 +1354,14 @@ class TractographyVisualizer:
             set during initialization (default: (800, 800)). Default is None.
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
-        max_streamlines : int | None, optional
-            Maximum number of streamlines to render. If the tract has more
-            streamlines, they will be randomly subsampled. This can help avoid
-            VTK segfaults with very large tracts. Default is None (no limit).
-        subsample_factor : float | None, optional
-            Factor to subsample streamlines (0.0 to 1.0). If 0.5, keeps 50% of
-            streamlines. If None, no subsampling. Default is None.
-        max_points_per_streamline : int | None, optional
-            Maximum number of points per streamline. Streamlines with more points
-            will be resampled to this limit. This can help avoid VTK segfaults
-            by reducing total point count. Default is None (no limit).
-        resample_streamlines : bool, optional
-            If True, resample all streamlines using approx_polygon_track with
-            distance=0.25 to reduce point count. This is a more aggressive
-            resampling that reduces points while preserving shape. Default is False.
         flip_lr : bool, optional
             Whether to flip left-right (X-axis) when transforming tract.
             This may be needed for some coordinate conventions or file formats
             where the left-right orientation differs (e.g., when working with
             MNI space). Default is False.
+        overwrite : bool, optional
+            If True, regenerate images even when output files already exist.
+            Default is False.
 
         Returns
         -------
@@ -1485,20 +1394,27 @@ class TractographyVisualizer:
         if figure_size is None:
             figure_size = self.figure_size
 
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
+        if ref_img is None:
+            if self._reference_image is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            ref_img = self._reference_image
+        else:
+            ref_img = Path(ref_img)
 
-        # Determine which views to generate
+        # Determine which views to generate and template space for camera (MNI vs RAS)
         if views is None:
-            views_to_generate = list(view_angles.keys())
+            views_to_generate = list(ANATOMICAL_VIEW_NAMES)
         else:
             views_to_generate = views
-            # Validate view names
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
             if invalid_views:
                 raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                    f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
                 )
+        template_space: Literal["ras", "mni"] = "mni" if "MNI" in str(ref_img) else "ras"
 
         # Get output directory
         if output_dir is None:
@@ -1512,17 +1428,7 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        if ref_img is None:
-            if self._reference_image is None:
-                raise InvalidInputError(
-                    "No reference image provided. Set it via constructor or "
-                    "set_reference_image() method, or pass it as an argument.",
-                )
-            ref_img = self._reference_image
-        else:
-            ref_img = Path(ref_img)
-
-        tract_name = self._extract_tract_name(tract_file)
+        tract_name = Path(tract_file).stem
         generated_views: dict[str, Path] = {}
 
         # Check if all output files already exist BEFORE loading tract
@@ -1530,7 +1436,7 @@ class TractographyVisualizer:
         all_files_exist = True
         for view_name in views_to_generate:
             output_image = output_dir / f"{tract_name}_{view_name}.png"
-            if output_image.exists():
+            if output_image.exists() and not overwrite:
                 generated_views[view_name] = output_image
                 logger.debug("Skipping generation of %s (file already exists)", output_image)
             else:
@@ -1565,13 +1471,7 @@ class TractographyVisualizer:
                 )
 
             # Filter streamlines if requested (to avoid VTK segfaults)
-            tract_streamlines = self._filter_streamlines(
-                tract_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
+            tract_streamlines = self._downsample_streamlines(tract_streamlines)
 
             # Check if streamlines are empty after filtering
             if not tract_streamlines or len(tract_streamlines) == 0:
@@ -1636,7 +1536,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"{tract_name}_{view_name}.png"
 
                 # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
+                if output_image.exists() and not overwrite:
                     continue
 
                 # Check memory before creating VTK actor
@@ -1712,6 +1612,7 @@ class TractographyVisualizer:
                         centroid,
                         view_name,
                         bbox_size=bbox_size,
+                        template_space=template_space,
                     )
                     logger.debug("Camera set successfully for view %s", view_name)
                 except (RuntimeError, OSError, MemoryError):
@@ -1800,12 +1701,12 @@ class TractographyVisualizer:
         ref_img: str | Path | None = None,
         *,
         show_glass_brain: bool = True,
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
         flip_lr: bool = False,
         window_size: tuple[int, int] = (800, 800),
+        max_streamlines: int | None = None,  # noqa: ARG002
+        subsample_factor: float | None = None,  # noqa: ARG002
+        max_points_per_streamline: int | None = None,  # noqa: ARG002
+        resample_streamlines: bool = False,  # noqa: ARG002
     ) -> None:
         """Display a tract in an interactive 3D viewer.
 
@@ -1821,21 +1722,6 @@ class TractographyVisualizer:
             set during initialization or via `set_reference_image()`.
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
-        max_streamlines : int | None, optional
-            Maximum number of streamlines to render. If the tract has more
-            streamlines, they will be randomly subsampled. This can help avoid
-            VTK segfaults with very large tracts. Default is None (no limit).
-        subsample_factor : float | None, optional
-            Factor to subsample streamlines (0.0 to 1.0). If 0.5, keeps 50% of
-            streamlines. If None, no subsampling. Default is None.
-        max_points_per_streamline : int | None, optional
-            Maximum number of points per streamline. Streamlines with more points
-            will be resampled to this limit. This can help avoid VTK segfaults
-            by reducing total point count. Default is None (no limit).
-        resample_streamlines : bool, optional
-            If True, resample all streamlines using approx_polygon_track with
-            distance=0.25 to reduce point count. This is a more aggressive
-            resampling that reduces points while preserving shape. Default is False.
         flip_lr : bool, optional
             Whether to flip left-right (X-axis) when transforming tract.
             This may be needed for some coordinate conventions or file formats
@@ -1893,13 +1779,7 @@ class TractographyVisualizer:
                 )
 
             # Filter streamlines if requested
-            tract_streamlines = self._filter_streamlines(
-                tract_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
+            tract_streamlines = self._downsample_streamlines(tract_streamlines)
 
             # Check if streamlines are empty after filtering
             if not tract_streamlines or len(tract_streamlines) == 0:
@@ -1957,10 +1837,7 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         atlas_name: str | None = None,
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
+        overwrite: bool = False,
     ) -> dict[str, Path]:
         """Generate anatomical views for an atlas tract.
 
@@ -1995,6 +1872,9 @@ class TractographyVisualizer:
         atlas_name : str | None, optional
             Name prefix for output files. If None, uses the stem of atlas_file.
             Default is None.
+        overwrite : bool, optional
+            If True, regenerate images even when output files already exist.
+            Default is False.
 
         Returns
         -------
@@ -2030,18 +1910,15 @@ class TractographyVisualizer:
             atlas_ref_img = ref_img
         atlas_ref_img = self._reference_image if atlas_ref_img is None else Path(atlas_ref_img)
 
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
-
         # Determine which views to generate
         if views is None:
-            views_to_generate = list(view_angles.keys())
+            views_to_generate = list(ANATOMICAL_VIEW_NAMES)
         else:
             views_to_generate = views
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
             if invalid_views:
                 raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                    f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
                 )
 
         # Get output directory
@@ -2057,7 +1934,7 @@ class TractographyVisualizer:
             output_dir.mkdir(parents=True, exist_ok=True)
 
         # Use provided atlas_name or derive from file
-        atlas_name = self._extract_tract_name(atlas_file) if atlas_name is None else str(atlas_name)
+        atlas_name = Path(atlas_file).stem if atlas_name is None else str(atlas_name)
 
         generated_views: dict[str, Path] = {}
 
@@ -2066,7 +1943,7 @@ class TractographyVisualizer:
         all_files_exist = True
         for view_name in views_to_generate:
             output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
-            if output_image.exists():
+            if output_image.exists() and not overwrite:
                 generated_views[view_name] = output_image
                 logger.debug("Skipping generation of %s (file already exists)", output_image)
             else:
@@ -2111,12 +1988,9 @@ class TractographyVisualizer:
                 centroid = np.mean(all_points, axis=0)
 
             # Filter streamlines if requested (to avoid VTK segfaults)
-            atlas_streamlines = self._filter_streamlines(
+            atlas_streamlines = self._downsample_streamlines(
                 atlas_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
+                approx_points=0.25,
             )
 
             # Check if streamlines are empty after filtering
@@ -2138,7 +2012,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
 
                 # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
+                if output_image.exists() and not overwrite:
                     continue
 
                 # Create scene using helper method
@@ -2217,7 +2091,7 @@ class TractographyVisualizer:
                 # This is critical for large tractograms to prevent OOM kills
                 gc.collect()
 
-            # Clean up large objects
+            # Clean up large objects after all views are generated
             del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
             gc.collect()
 
@@ -2227,362 +2101,6 @@ class TractographyVisualizer:
             raise TractographyVisualizationError(
                 f"Failed to generate atlas views: {e}",
             ) from e
-        else:
-            return generated_views
-
-    def plot_cci(
-        self,
-        cci: np.ndarray,
-        keep_tract: StatefulTractogram,
-        hist_file: str | Path,
-        ref_img: str | Path | None = None,
-        *,
-        views: list[str] | None = None,
-        output_dir: str | Path | None = None,
-        figure_size: tuple[int, int] = (800, 800),
-        show_glass_brain: bool = True,
-        bins: int = 100,
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
-    ) -> dict[str, Path]:
-        """Plot CCI with anatomical views.
-
-        Generates anatomical views (coronal, axial, sagittal) with streamlines
-        colored by CCI values, along with a histogram plot.
-
-        Parameters
-        ----------
-        cci : np.ndarray
-            CCI values array (one per streamline in keep_tract).
-        keep_tract : StatefulTractogram
-            Filtered tractogram to visualize (should match CCI array length).
-        hist_file : str | Path
-            Path to save the histogram plot.
-        ref_img : str | Path | None, optional
-            Path to the reference image. If None, uses the reference image
-            set during initialization.
-        views : list[str] | None, optional
-            List of views to generate. Options: "coronal", "axial", "sagittal".
-            If None, generates all three views. Default is None.
-        output_dir : str | Path | None, optional
-            Output directory for generated images. If None, uses the output
-            directory set during initialization.
-        figure_size : tuple[int, int], optional
-            Size of the output images in pixels. Default is (800, 800).
-        show_glass_brain : bool, optional
-            Whether to show the glass brain outline. Default is True.
-        bins : int, optional
-            Number of bins for histogram. Default is 100.
-        max_streamlines : int | None, optional
-            Maximum number of streamlines to keep. If None, no limit.
-            Useful for reducing memory usage with large tractograms.
-        subsample_factor : float | None, optional
-            Fraction of streamlines to keep (0-1). If None, no subsampling.
-            Useful for reducing memory usage with large tractograms.
-        max_points_per_streamline : int | None, optional
-            Maximum points per streamline. Streamlines exceeding this will be resampled.
-            Useful for reducing memory usage with very long streamlines.
-        resample_streamlines : bool, optional
-            Whether to resample all streamlines using approx_polygon_track.
-            Useful for reducing memory usage by reducing points per streamline.
-
-        Returns
-        -------
-        dict[str, Path]
-            Dictionary mapping view names to their output file paths.
-            Keys: "coronal", "axial", "sagittal", "histogram".
-
-        Raises
-        ------
-        InvalidInputError
-            If CCI array is empty or invalid, or length mismatch with tract.
-        TractographyVisualizationError
-            If plotting fails.
-        """
-        if len(cci) == 0:
-            raise InvalidInputError("CCI array is empty.")
-
-        # Get output directory
-        if output_dir is None:
-            if self._output_directory is None:
-                raise InvalidInputError(
-                    "No output directory provided. Set it via constructor or "
-                    "set_output_directory() method, or pass it as an argument.",
-                )
-            output_dir = self._output_directory
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-        if ref_img is None:
-            if self._reference_image is None:
-                raise InvalidInputError(
-                    "No reference image provided. Set it via constructor or "
-                    "set_reference_image() method, or pass it as an argument.",
-                )
-            ref_img = self._reference_image
-        else:
-            ref_img = Path(ref_img)
-
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
-
-        # Determine which views to generate
-        if views is None:
-            views_to_generate = list(view_angles.keys())
-        else:
-            views_to_generate = views
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
-            if invalid_views:
-                raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
-                )
-
-        generated_views: dict[str, Path] = {}
-
-        try:
-            # Create histogram
-            hist_path = Path(hist_file)
-            hist_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Skip histogram if file already exists
-            if not hist_path.exists():
-                fig, ax = plt.subplots(1, figsize=(8, 6))
-                ax.hist(cci, bins=bins, histtype="step")
-                ax.set_xlabel("CCI")
-                ax.set_ylabel("# streamlines")
-                ax.set_title("CCI Distribution")
-                ax.grid(visible=True, alpha=0.3)
-                fig.savefig(str(hist_path), dpi=150, bbox_inches="tight")
-                plt.close(fig)
-            else:
-                logger.debug("Skipping generation of %s (file already exists)", hist_path)
-
-            generated_views["histogram"] = hist_path
-
-            # Check if all view files already exist BEFORE processing tract
-            # This prevents unnecessary memory usage when files are already generated
-            all_view_files_exist = True
-            for view_name in views_to_generate:
-                output_image = output_dir / f"cci_{view_name}.png"
-                if output_image.exists():
-                    generated_views[view_name] = output_image
-                    logger.debug("Skipping generation of %s (file already exists)", output_image)
-                else:
-                    all_view_files_exist = False
-
-            # If all view files exist, return early without processing tract streamlines
-            if all_view_files_exist:
-                return generated_views
-
-            # Transform tract streamlines to reference space (only if needed)
-            ref_img_obj = nib.load(str(ref_img))
-            tract_streamlines = transform_streamlines(
-                keep_tract.streamlines,
-                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
-            )
-
-            # Check if streamlines are empty
-            if not tract_streamlines or len(tract_streamlines) == 0:
-                logger.warning(
-                    "Tract has 0 streamlines after CCI filtering. Skipping visualization.",
-                )
-                return {}
-
-            # Filter streamlines and CCI array together if requested (to avoid VTK segfaults)
-            # We need to filter them together to maintain correspondence
-            original_streamline_count = len(tract_streamlines)
-            if max_streamlines is not None and len(tract_streamlines) > max_streamlines:
-                # Randomly subsample to max_streamlines, keeping CCI aligned
-                indices_array = np.random.choice(
-                    len(tract_streamlines),
-                    size=max_streamlines,
-                    replace=False,
-                )
-                indices = sorted(indices_array.tolist())  # Keep original order
-                tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
-                cci = cci[indices]
-                logger.info(
-                    "Subsampled streamlines from %d to %d (max_streamlines=%d)",
-                    original_streamline_count,
-                    len(tract_streamlines),
-                    max_streamlines,
-                )
-            elif subsample_factor is not None and 0 < subsample_factor < 1:
-                # Subsample by factor, keeping CCI aligned
-                n_keep = int(len(tract_streamlines) * subsample_factor)
-                if n_keep < len(tract_streamlines):
-                    indices_array = np.random.choice(
-                        len(tract_streamlines),
-                        size=n_keep,
-                        replace=False,
-                    )
-                    indices = sorted(indices_array.tolist())  # Keep original order
-                    tract_streamlines = Streamlines([tract_streamlines[i] for i in indices])
-                    cci = cci[indices]
-                    logger.info(
-                        "Subsampled streamlines from %d to %d (factor=%.2f)",
-                        original_streamline_count,
-                        len(tract_streamlines),
-                        subsample_factor,
-                    )
-
-            # Apply point-level filtering (doesn't affect streamline count, so CCI stays aligned)
-            tract_streamlines = self._filter_streamlines(
-                tract_streamlines,
-                max_streamlines=None,  # Already filtered above
-                subsample_factor=None,  # Already filtered above
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
-
-            # Validate CCI array matches tract (critical for memory safety)
-            if len(cci) != len(tract_streamlines):
-                raise InvalidInputError(
-                    f"CCI array length ({len(cci)}) does not match "
-                    f"tractogram streamlines ({len(tract_streamlines)}). "
-                    f"This can cause memory issues.",
-                )
-
-            # Calculate CCI colors for each streamline
-            # Use the same color scheme as the original CCI visualization
-            cci_min = float(cci.min())
-            cci_max = float(cci.max())
-
-            # Create lookup table with same parameters as original
-            hue = [0.5, 1]
-            saturation = [0.0, 1.0]
-            lut_cmap = actor.colormap_lookup_table(
-                scale_range=(cci_min, cci_max / 4),
-                hue_range=hue,
-                saturation_range=saturation,
-            )
-
-            bar = actor.scalar_bar(lookup_table=lut_cmap)
-
-            # Get centroid using utility function
-            centroid = calculate_centroid(tract_streamlines)
-            gc.collect()
-
-            # Generate each requested view
-            for view_name in views_to_generate:
-                output_image = output_dir / f"cci_{view_name}.png"
-
-                # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
-                    continue
-
-                # Create scene
-                scene = window.Scene()
-                scene.SetBackground(0.5, 0.5, 0.5)
-                scene.add(bar)
-
-                # Add glass brain if requested (no rotation needed - camera handles view)
-                brain_actor = None
-                if show_glass_brain:
-                    brain_actor = self.get_glass_brain(ref_img)
-                    scene.add(brain_actor)
-
-                # Check memory before creating large VTK actor
-                estimated_memory = _estimate_actor_memory_mb(tract_streamlines, figure_size)
-                if not _check_memory_available(estimated_memory, safety_margin=0.3):
-                    logger.warning(
-                        "Insufficient memory to create actor for %d streamlines. Skipping view %s",
-                        len(tract_streamlines),
-                        view_name,
-                    )
-                    continue
-
-                # Use CCI array directly with original streamlines (no rotation - camera handles view)
-                try:
-                    tract_actor = actor.line(
-                        tract_streamlines,
-                        colors=cci,
-                        linewidth=0.1,
-                        lookup_colormap=lut_cmap,
-                    )
-                    scene.add(tract_actor)
-                except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors
-                    error_msg = str(e).lower()
-                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        logger.exception(
-                            "VTK memory allocation failed for view %s (likely std::bad_alloc). "
-                            "Try reducing tract size, image resolution, or using n_jobs=1.",
-                            view_name,
-                        )
-                        # Clean up and skip this view
-                        scene.clear()
-                        del scene
-                        gc.collect()
-                        continue
-                    raise
-
-                # Set camera position for anatomical view using utility function
-                bbox_size = calculate_bbox_size(tract_streamlines)
-
-                # Use helper method to set camera
-                self._set_anatomical_camera(
-                    scene,
-                    centroid,
-                    view_name,
-                    bbox_size=bbox_size,
-                )
-
-                # Record the scene (this can also fail with std::bad_alloc)
-                try:
-                    window.record(
-                        scene=scene,
-                        out_path=str(output_image),
-                        size=figure_size,
-                    )
-                    generated_views[view_name] = output_image
-                except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors during rendering
-                    error_msg = str(e).lower()
-                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        logger.exception(
-                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
-                            "Tract has %d streamlines with %d total points. "
-                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
-                            view_name,
-                            len(tract_streamlines),
-                            sum(len(sl) for sl in tract_streamlines),
-                        )
-                        # Clean up and skip this view
-                        scene.clear()
-                        del tract_actor
-                        if brain_actor is not None:
-                            del brain_actor
-                        del scene
-                        gc.collect()
-                        continue
-                    raise
-
-                # Explicitly clean up scene and actors to free memory
-                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
-                scene.clear()
-                del tract_actor
-                if brain_actor is not None:
-                    del brain_actor
-                del scene
-
-                # Force garbage collection between views to free memory
-                # This is critical for large tractograms to prevent OOM kills
-                gc.collect()
-
-                generated_views[view_name] = output_image
-
-            # Clean up large objects after all views are generated
-            del keep_tract, tract_streamlines, cci
-            gc.collect()
-
-        except TractographyVisualizationError:
-            raise
-        except (OSError, ValueError, RuntimeError) as e:
-            raise TractographyVisualizationError(f"Failed to plot CCI: {e}") from e
         else:
             return generated_views
 
@@ -2599,10 +2117,7 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         colormap: str = "Spectral",
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
+        overwrite: bool = False,
     ) -> dict[str, Path]:
         """Plot AFQ profile with anatomical views.
 
@@ -2635,6 +2150,9 @@ class TractographyVisualizer:
         colormap : str, optional
             Name of the colormap to use for AFQ profile values.
             Default is "Spectral".
+        overwrite : bool, optional
+            If True, regenerate images even when output files already exist.
+            Default is False.
 
         Returns
         -------
@@ -2665,18 +2183,15 @@ class TractographyVisualizer:
                 return {}
             raise
 
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
-
         # Determine which views to generate
         if views is None:
-            views_to_generate = list(view_angles.keys())
+            views_to_generate = list(ANATOMICAL_VIEW_NAMES)
         else:
             views_to_generate = views
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
             if invalid_views:
                 raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                    f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
                 )
 
         # Get output directory
@@ -2701,12 +2216,12 @@ class TractographyVisualizer:
         else:
             ref_img = Path(ref_img)
 
-        tract_name = self._extract_tract_name(tract_file)
+        tract_name = Path(tract_file).stem
         generated_views: dict[str, Path] = {}
 
         # Check profile plot path
         profile_plot_path = output_dir / f"{tract_name}_{metric_str}_profile.png"
-        if profile_plot_path.exists():
+        if profile_plot_path.exists() and not overwrite:
             logger.debug("Skipping generation of %s (file already exists)", profile_plot_path)
         generated_views["profile_plot"] = profile_plot_path
 
@@ -2715,14 +2230,14 @@ class TractographyVisualizer:
         all_view_files_exist = True
         for view_name in views_to_generate:
             output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
-            if output_image.exists():
+            if output_image.exists() and not overwrite:
                 generated_views[view_name] = output_image
                 logger.debug("Skipping generation of %s (file already exists)", output_image)
             else:
                 all_view_files_exist = False
 
         # If all view files exist and profile plot exists, return early without loading tract
-        if all_view_files_exist and profile_plot_path.exists():
+        if all_view_files_exist and profile_plot_path.exists() and not overwrite:
             return generated_views
 
         try:
@@ -2744,14 +2259,8 @@ class TractographyVisualizer:
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
-            # Filter streamlines if requested (to avoid VTK segfaults)
-            tract_streamlines = self._filter_streamlines(
-                tract_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
+            # Downsample points (to avoid VTK segfaults)
+            tract_streamlines = self._downsample_streamlines(tract_streamlines)
 
             # Check if streamlines are empty after filtering
             if not tract_streamlines or len(tract_streamlines) == 0:
@@ -2784,7 +2293,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
 
                 # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
+                if output_image.exists() and not overwrite:
                     continue
 
                 # Create scene using helper method
@@ -2858,8 +2367,8 @@ class TractographyVisualizer:
                 # This is critical for large tractograms to prevent OOM kills
                 gc.collect()
 
-            # Also create the profile line plot (if it doesn't already exist)
-            if not profile_plot_path.exists():
+            # Also create the profile line plot (if it doesn't already exist or overwrite)
+            if not profile_plot_path.exists() or overwrite:
                 fig, ax = plt.subplots(1, figsize=(8, 6))
                 ax.plot(profile)
                 ax.set_xlabel("Node along tract")
@@ -3018,10 +2527,7 @@ class TractographyVisualizer:
         show_glass_brain: bool = True,
         subject_color: tuple[float, float, float] = (1.0, 0.0, 0.0),  # Red
         atlas_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
+        overwrite: bool = False,
     ) -> dict[str, Path]:
         """Visualize shape similarity by overlaying subject and atlas tracts.
 
@@ -3054,6 +2560,9 @@ class TractographyVisualizer:
             RGB color for subject tract (0-1 range). Default is (1.0, 0.0, 0.0) (red).
         atlas_color : tuple[float, float, float], optional
             RGB color for atlas tract (0-1 range). Default is (0.0, 0.0, 1.0) (blue).
+        overwrite : bool, optional
+            If True, regenerate images even when output files already exist.
+            Default is False.
 
         Returns
         -------
@@ -3079,18 +2588,15 @@ class TractographyVisualizer:
         ...     "subject_tract.trk", "atlas_tract.trk"
         ... )
         """
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
-
         # Determine which views to generate
         if views is None:
-            views_to_generate = list(view_angles.keys())
+            views_to_generate = list(ANATOMICAL_VIEW_NAMES)
         else:
             views_to_generate = views
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
             if invalid_views:
                 raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                    f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
                 )
 
         # Get output directory
@@ -3105,8 +2611,8 @@ class TractographyVisualizer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        tract_name = self._extract_tract_name(tract_file)
-        atlas_name = self._extract_tract_name(atlas_file)
+        tract_name = Path(tract_file).stem
+        atlas_name = Path(atlas_file).stem
         generated_views: dict[str, Path] = {}
 
         # Check if all output files already exist BEFORE loading tracts
@@ -3114,7 +2620,7 @@ class TractographyVisualizer:
         all_files_exist = True
         for view_name in views_to_generate:
             output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
-            if output_image.exists():
+            if output_image.exists() and not overwrite:
                 generated_views[view_name] = output_image
                 logger.debug("Skipping generation of %s (file already exists)", output_image)
             else:
@@ -3157,21 +2663,9 @@ class TractographyVisualizer:
                     [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
                 )
 
-            # Filter streamlines if requested (to avoid VTK segfaults)
-            subject_streamlines = self._filter_streamlines(
-                subject_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
-            atlas_streamlines = self._filter_streamlines(
-                atlas_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
+            # Downsample points (to avoid VTK segfaults)
+            subject_streamlines = self._downsample_streamlines(subject_streamlines)
+            atlas_streamlines = self._downsample_streamlines(atlas_streamlines)
 
             # Check if streamlines are empty after filtering
             if (not subject_streamlines or len(subject_streamlines) == 0) and (
@@ -3201,7 +2695,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
 
                 # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
+                if output_image.exists() and not overwrite:
                     continue
 
                 # Create scene using helper method
@@ -3211,7 +2705,7 @@ class TractographyVisualizer:
                 # Use original streamlines - camera handles view
                 subject_colors = np.tile(subject_color, (len(subject_streamlines), 1))
                 try:
-                    subject_actor = actor.line(subject_streamlines, colors=subject_colors)
+                    subject_actor = actor.line(subject_streamlines, colors=subject_colors, opacity=0.05)
                     scene.add(subject_actor)
                 except RuntimeError as e:
                     # Catch std::bad_alloc and other VTK errors
@@ -3238,7 +2732,7 @@ class TractographyVisualizer:
                 # Use original streamlines - camera handles view
                 atlas_colors = np.tile(atlas_color, (len(atlas_streamlines), 1))
                 try:
-                    atlas_actor = actor.line(atlas_streamlines, colors=atlas_colors)
+                    atlas_actor = actor.line(atlas_streamlines, colors=atlas_colors, opacity=0.05)
                     scene.add(atlas_actor)
                 except RuntimeError as e:
                     # Catch std::bad_alloc and other VTK errors
@@ -3338,17 +2832,19 @@ class TractographyVisualizer:
         output_dir: str | Path | None = None,
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
-        before_color: tuple[float, float, float] = (0.7, 0.7, 0.7),  # Light gray
-        after_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
-    ) -> dict[str, Path]:
-        """Compare tract before and after CCI filtering.
+        bins: int = 100,
+        overwrite: bool = False,
+        cci: np.ndarray | None = None,
+        keep_cci: np.ndarray | None = None,
+        keep_tract: StatefulTractogram | None = None,
+        long_streamlines: Streamlines | None = None,
+    ) -> dict[str, Path] | dict[str, Path | dict[str, Path]]:
+        """Generate CCI histogram and before/after CCI views (original vs filtered).
 
-        Generates side-by-side anatomical views (coronal, axial, sagittal) showing
-        the tract before CCI filtering (left) and after CCI filtering (right).
+        Calls :meth:`calc_cci` (or uses optional precomputed outputs) and produces:
+        - A histogram of CCI values (`<tract>_cci_histogram.png`).
+        - For each anatomical view: original tract colored by CCI (`cci_before_<tract>_<view>.png`)
+          and filtered tract colored by filtered CCI (`cci_after_<tract>_<view>.png`).
 
         Parameters
         ----------
@@ -3364,29 +2860,39 @@ class TractographyVisualizer:
             Output directory for generated images. If None, uses the output
             directory set during initialization.
         figure_size : tuple[int, int], optional
-            Size of each side of the comparison image in pixels. The final image
-            will be twice as wide. Default is (800, 800).
+            Size of each image in pixels. Default is (800, 800).
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
-        before_color : tuple[float, float, float], optional
-            RGB color for before CCI filtering tract (0-1 range).
-            Default is (0.7, 0.7, 0.7) (light gray).
-        after_color : tuple[float, float, float], optional
-            RGB color for after CCI filtering tract (0-1 range).
-            Default is (0.0, 0.0, 1.0) (blue).
+        bins : int, optional
+            Number of bins for the CCI histogram. Default is 100.
+        max_streamlines : int | None, optional
+            Maximum number of streamlines to keep for visualization. If None, no limit.
+        subsample_factor : float | None, optional
+            Fraction of streamlines to keep (0-1). If None, no subsampling.
+        overwrite : bool, optional
+            If True, regenerate images even when output files already exist.
+            Default is False.
+        cci : np.ndarray | None, optional
+            Precomputed CCI for all long streamlines. If provided with keep_cci,
+            keep_tract, and long_streamlines, :meth:`calc_cci` is not called.
+        keep_cci : np.ndarray | None, optional
+            Precomputed CCI above threshold (aligned with keep_tract).
+        keep_tract : StatefulTractogram | None, optional
+            Precomputed filtered tractogram.
+        long_streamlines : Streamlines | None, optional
+            Precomputed long streamlines used for CCI (length > min_streamline_length).
 
         Returns
         -------
-        dict[str, Path]
-            Dictionary mapping view names to their output file paths.
-            Keys: "coronal", "axial", "sagittal".
+        dict[str, Path] | dict[str, Path | dict[str, Path]]
+            - Key "histogram": Path to the CCI histogram image.
+            - For each view (coronal, axial, sagittal): a dict with keys
+              before and after, each mapping to the Path of that image.
 
         Raises
         ------
-        FileNotFoundError
-            If required files are not found.
         InvalidInputError
-            If no output directory is available or invalid view name.
+            If no output directory or reference image, or invalid view name.
         TractographyVisualizationError
             If comparison fails.
 
@@ -3395,20 +2901,20 @@ class TractographyVisualizer:
         >>> visualizer = TractographyVisualizer(
         ...     reference_image="t1w.nii.gz", output_directory="output/"
         ... )
-        >>> views = visualizer.compare_before_after_cci("tract.trk")
+        >>> result = visualizer.compare_before_after_cci("tract.trk")
+        >>> result["histogram"]
+        >>> list(result["coronal"].keys())
+        ['before', 'after']
         """
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
-
         # Determine which views to generate
         if views is None:
-            views_to_generate = list(view_angles.keys())
+            views_to_generate = list(ANATOMICAL_VIEW_NAMES)
         else:
             views_to_generate = views
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
             if invalid_views:
                 raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                    f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
                 )
 
         # Get output directory
@@ -3433,108 +2939,108 @@ class TractographyVisualizer:
         else:
             ref_img = Path(ref_img)
 
-        tract_name = self._extract_tract_name(tract_file)
-        generated_views: dict[str, Path] = {}
+        tract_name = Path(tract_file).stem
+        hist_path = output_dir / f"{tract_name}_cci_histogram.png"
+        generated_views: dict[str, Path | dict[str, Path]] = {}
 
-        # Check if all output files already exist BEFORE loading tract
-        # This prevents unnecessary memory usage when files are already generated
+        # Check if histogram and all view files already exist (skip loading tract)
         all_files_exist = True
+        if not hist_path.exists() or overwrite:
+            all_files_exist = False
+        else:
+            generated_views["histogram"] = hist_path
         for view_name in views_to_generate:
-            output_image = output_dir / f"cci_before_after_{tract_name}_{view_name}.png"
-            if output_image.exists():
-                generated_views[view_name] = output_image
-                logger.debug("Skipping generation of %s (file already exists)", output_image)
+            output_before = output_dir / f"cci_before_{tract_name}_{view_name}.png"
+            output_after = output_dir / f"cci_after_{tract_name}_{view_name}.png"
+            if output_before.exists() and output_after.exists() and not overwrite:
+                generated_views[view_name] = {"before": output_before, "after": output_after}
+                logger.debug(
+                    "Skipping generation of before/after CCI for %s (%s, %s already exist)",
+                    view_name,
+                    output_before,
+                    output_after,
+                )
             else:
                 all_files_exist = False
 
-        # If all files exist, return early without loading tract
         if all_files_exist:
             return generated_views
 
         try:
-            # Load tract only if we need to generate at least one view
-            tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
-            tract.to_rasmm()
+            # Get CCI and tracts: use precomputed or call calc_cci
+            if cci is not None and keep_cci is not None and keep_tract is not None and long_streamlines is not None:
+                pass  # use provided arrays/tracts
+            else:
+                cci, keep_cci, keep_tract, long_streamlines = self.calc_cci(tract_file, ref_img=ref_img)
 
-            # Calculate CCI and get filtered tract
-            _, filtered_tract = self.calc_cci(tract)
+            if len(cci) == 0:
+                logger.warning("No CCI values; skipping CCI visualization.")
+                return generated_views
 
-            # Transform both tracts to reference space
             ref_img_obj = nib.load(str(ref_img))
+            inv_affine = np.linalg.inv(ref_img_obj.affine)  # type: ignore[attr-defined]
 
-            # Before CCI filtering: use all streamlines (after length filtering)
-            # We need to get the streamlines that were used for CCI calculation
-            # (i.e., those longer than min_streamline_length)
-            lengths = list(length(tract.streamlines))
-            before_streamlines = Streamlines()
-            for i, sl in enumerate(tract.streamlines):
-                if lengths[i] > self.min_streamline_length:
-                    before_streamlines.append(sl)
+            # Histogram
+            if not hist_path.exists() or overwrite:
+                fig, ax = plt.subplots(1, figsize=(8, 6))
+                ax.hist(cci, bins=bins, histtype="step")
+                ax.set_xlabel("CCI")
+                ax.set_ylabel("# streamlines")
+                ax.set_title("CCI Distribution")
+                ax.grid(visible=True, alpha=0.3)
+                fig.savefig(str(hist_path), dpi=150, bbox_inches="tight")
+                plt.close(fig)
+            generated_views["histogram"] = hist_path
 
-            before_streamlines = transform_streamlines(
-                before_streamlines,
-                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
-            )
-
-            # After CCI filtering: use filtered tract
+            # Transform to reference space and optionally subsample
+            before_streamlines = transform_streamlines(long_streamlines, inv_affine)
             after_streamlines = transform_streamlines(
-                filtered_tract.streamlines,
-                np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+                keep_tract.streamlines,
+                inv_affine,
             )
+            cci_before = np.asarray(cci, dtype=np.float64)
 
-            # Filter streamlines if requested (to avoid VTK segfaults)
-            before_streamlines = self._filter_streamlines(
-                before_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
+            cci_min = float(np.min(cci))
+            cci_max = float(np.max(cci))
+            hue = [0.5, 1]
+            saturation = [0.0, 1.0]
+            lut_cmap = actor.colormap_lookup_table(
+                scale_range=(cci_min, cci_max / 4),
+                hue_range=hue,
+                saturation_range=saturation,
             )
-            after_streamlines = self._filter_streamlines(
-                after_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
-
-            # Calculate combined centroid for rotation (from both tracts)
-            # Calculate combined centroid using utility function
+            bar = actor.scalar_bar(lookup_table=lut_cmap)
             centroid = calculate_combined_centroid(before_streamlines, after_streamlines)
 
             # Generate each requested view
             for view_name in views_to_generate:
-                output_image = output_dir / f"cci_before_after_{tract_name}_{view_name}.png"
+                output_before = output_dir / f"cci_before_{tract_name}_{view_name}.png"
+                output_after = output_dir / f"cci_after_{tract_name}_{view_name}.png"
 
-                # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
+                if output_before.exists() and output_after.exists() and not overwrite:
                     continue
 
-                # Create side-by-side scenes using helper methods
-                # Left side: Before CCI filtering
+                # Before: original tract colored by CCI
                 scene_before, brain_actor_before = self._create_scene(
                     ref_img=ref_img,
                     show_glass_brain=show_glass_brain,
                 )
-
-                # Add before tract (use original streamlines - camera handles view)
-                before_colors = np.tile(before_color, (len(before_streamlines), 1))
+                scene_before.add(bar)
                 try:
-                    before_actor = actor.line(before_streamlines, colors=before_colors)
+                    before_actor = actor.line(
+                        before_streamlines,
+                        colors=cci_before,
+                        linewidth=0.1,
+                        lookup_colormap=lut_cmap,
+                    )
                     scene_before.add(before_actor)
                 except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors
                     error_msg = str(e).lower()
                     if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        total_points = sum(len(sl) for sl in before_streamlines)
                         logger.exception(
                             "VTK memory allocation failed for before CCI actor (likely std::bad_alloc). "
-                            "Before has %d streamlines with %d total points. "
                             "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
-                            len(before_streamlines),
-                            total_points,
                         )
-                        # Clean up and skip this view
                         scene_before.clear()
                         del scene_before
                         if brain_actor_before is not None:
@@ -3543,7 +3049,6 @@ class TractographyVisualizer:
                         continue
                     raise
 
-                # Set camera for before scene using utility function
                 bbox_size_before = calculate_bbox_size(before_streamlines)
                 self._set_anatomical_camera(
                     scene_before,
@@ -3552,31 +3057,27 @@ class TractographyVisualizer:
                     bbox_size=bbox_size_before,
                 )
 
-                # Right side: After CCI filtering
-                scene_after, brain_actor_after = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
-
-                # Add after tract (use original streamlines - camera handles view)
-                after_colors = np.tile(after_color, (len(after_streamlines), 1))
+                # After: filtered tract colored by filtered CCI
+                scene_after, brain_actor_after = self._create_scene(
+                    ref_img=ref_img,
+                    show_glass_brain=show_glass_brain,
+                )
                 try:
-                    after_actor = actor.line(after_streamlines, colors=after_colors)
+                    after_actor = actor.line(
+                        after_streamlines,
+                        linewidth=0.1,
+                    )
                     scene_after.add(after_actor)
                 except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors
                     error_msg = str(e).lower()
                     if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        total_points = sum(len(sl) for sl in after_streamlines)
                         logger.exception(
                             "VTK memory allocation failed for after CCI actor (likely std::bad_alloc). "
-                            "After has %d streamlines with %d total points. "
                             "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
-                            len(after_streamlines),
-                            total_points,
                         )
-                        # Clean up and skip this view
                         scene_before.clear()
                         scene_after.clear()
-                        if before_actor is not None:
-                            del before_actor
+                        del before_actor
                         if brain_actor_before is not None:
                             del brain_actor_before
                         if brain_actor_after is not None:
@@ -3586,7 +3087,6 @@ class TractographyVisualizer:
                         continue
                     raise
 
-                # Set camera for after scene using utility function
                 bbox_size_after = calculate_bbox_size(after_streamlines)
                 self._set_anatomical_camera(
                     scene_after,
@@ -3595,39 +3095,25 @@ class TractographyVisualizer:
                     bbox_size=bbox_size_after,
                 )
 
-                # Record both scenes to temporary files
-
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_before:
-                    tmp_before_path = tmp_before.name
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_after:
-                    tmp_after_path = tmp_after.name
-
-                # Record both scenes (this can also fail with std::bad_alloc)
                 try:
                     window.record(
                         scene=scene_before,
-                        out_path=tmp_before_path,
+                        out_path=str(output_before),
                         size=figure_size,
                     )
                     window.record(
                         scene=scene_after,
-                        out_path=tmp_after_path,
+                        out_path=str(output_after),
                         size=figure_size,
                     )
                 except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors during rendering
                     error_msg = str(e).lower()
                     if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
                         logger.exception(
                             "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
-                            "Before has %d streamlines, after has %d streamlines. "
                             "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
                             view_name,
-                            len(before_streamlines),
-                            len(after_streamlines),
                         )
-                        # Clean up and skip this view
-                        # Clean up and skip this view
                         scene_before.clear()
                         scene_after.clear()
                         del before_actor, after_actor
@@ -3637,55 +3123,20 @@ class TractographyVisualizer:
                             del brain_actor_after
                         del scene_before, scene_after
                         gc.collect()
-                        # Clean up temp files if they were created
-                        with contextlib.suppress(OSError):
-                            os.unlink(tmp_before_path)
-                            os.unlink(tmp_after_path)
                         continue
                     raise
 
-                # Combine images side-by-side using PIL/Pillow or imageio
-                try:
-                    img_before = Image.open(tmp_before_path)
-                    img_after = Image.open(tmp_after_path)
-
-                    # Create combined image (twice as wide)
-                    combined_width = figure_size[0] * 2
-                    combined_height = figure_size[1]
-                    combined_img = Image.new("RGB", (combined_width, combined_height), (255, 255, 255))
-                    combined_img.paste(img_before, (0, 0))
-                    combined_img.paste(img_after, (figure_size[0], 0))
-                    combined_img.save(str(output_image))
-
-                    img_before.close()
-                    img_after.close()
-                except ImportError:
-                    # Fallback to imageio if PIL not available
-
-                    img_before = imageio.imread(tmp_before_path)
-                    img_after = imageio.imread(tmp_after_path)
-                    combined_img = np.concatenate([img_before, img_after], axis=1)
-                    imageio.imwrite(str(output_image), combined_img)
-
-                # Clean up temporary files
-                os.unlink(tmp_before_path)
-                os.unlink(tmp_after_path)
-
-                # Clean up scenes
-                # Explicitly clean up scenes and actors to free memory
-                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
                 scene_before.clear()
                 scene_after.clear()
                 del before_actor, after_actor
-                if show_glass_brain:
-                    del brain_actor_before, brain_actor_after
+                if brain_actor_before is not None:
+                    del brain_actor_before
+                if brain_actor_after is not None:
+                    del brain_actor_after
                 del scene_before, scene_after
-
-                # Force garbage collection between views to free memory
-                # This is critical for large tractograms to prevent OOM kills
                 gc.collect()
 
-                generated_views[view_name] = output_image
+                generated_views[view_name] = {"before": output_before, "after": output_after}
 
         except TractographyVisualizationError:
             raise
@@ -3708,10 +3159,7 @@ class TractographyVisualizer:
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         colormap: str = "random",
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
+        overwrite: bool = False,
     ) -> dict[str, Path]:
         """Visualize bundle assignment map using DIPY's assignment_map.
 
@@ -3747,6 +3195,9 @@ class TractographyVisualizer:
             Name of the colormap to use for segment colors. Should be a
             discrete colormap (e.g., "tab20", "Set3", "Paired").
             Default is "tab20".
+        overwrite : bool, optional
+            If True, regenerate images even when output files already exist.
+            Default is False.
 
         Returns
         -------
@@ -3772,19 +3223,17 @@ class TractographyVisualizer:
         ...     "target_tract.trk", "model_tract.trk", n_segments=100
         ... )
         """
-        # Use standard anatomical view angles from utils
-        view_angles = ANATOMICAL_VIEW_ANGLES
         rgb = (2, 3)
 
         # Determine which views to generate
         if views is None:
-            views_to_generate = list(view_angles.keys())
+            views_to_generate = list(ANATOMICAL_VIEW_NAMES)
         else:
             views_to_generate = views
-            invalid_views = [v for v in views_to_generate if v not in view_angles]
+            invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
             if invalid_views:
                 raise InvalidInputError(
-                    f"Invalid view names: {invalid_views}. Valid options: {list(view_angles.keys())}",
+                    f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
                 )
 
         # Get output directory
@@ -3809,7 +3258,7 @@ class TractographyVisualizer:
         else:
             ref_img = Path(ref_img)
 
-        tract_name = self._extract_tract_name(tract_file)
+        tract_name = Path(tract_file).stem
         generated_views: dict[str, Path] = {}
 
         # Check if all output files already exist BEFORE loading tracts
@@ -3817,7 +3266,7 @@ class TractographyVisualizer:
         all_files_exist = True
         for view_name in views_to_generate:
             output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
-            if output_image.exists():
+            if output_image.exists() and not overwrite:
                 generated_views[view_name] = output_image
                 logger.debug("Skipping generation of %s (file already exists)", output_image)
             else:
@@ -3852,21 +3301,9 @@ class TractographyVisualizer:
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
-            # Filter streamlines if requested (to avoid VTK segfaults)
-            tract_streamlines = self._filter_streamlines(
-                tract_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
-            atlas_streamlines = self._filter_streamlines(
-                atlas_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
+            # Downsample points (to avoid VTK segfaults)
+            tract_streamlines = self._downsample_streamlines(tract_streamlines)
+            atlas_streamlines = self._downsample_streamlines(atlas_streamlines)
 
             # Calculate assignments on transformed streamlines (both in same space)
             # This ensures consistent colors across all rotations
@@ -3970,7 +3407,7 @@ class TractographyVisualizer:
                 output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
 
                 # Skip if file already exists (already added to generated_views above)
-                if output_image.exists():
+                if output_image.exists() and not overwrite:
                     continue
 
                 # Create scene using helper method
@@ -4088,10 +3525,11 @@ class TractographyVisualizer:
         *,
         ref_file: str | Path | None = None,  # Alias for ref_img
         output_dir: str | Path | None = None,
-        max_streamlines: int | None = None,
-        subsample_factor: float | None = None,
-        max_points_per_streamline: int | None = None,
-        resample_streamlines: bool = False,
+        overwrite: bool = False,
+        max_streamlines: int | None = None,  # noqa: ARG002
+        subsample_factor: float | None = None,  # noqa: ARG002
+        max_points_per_streamline: int | None = None,  # noqa: ARG002
+        resample_streamlines: bool = False,  # noqa: ARG002
     ) -> Path:
         """Generate a GIF animation of rotating tractography.
 
@@ -4107,6 +3545,9 @@ class TractographyVisualizer:
         output_dir : str | Path | None, optional
             Output directory. If None, uses the output directory set during
             initialization or creates a default directory.
+        overwrite : bool, optional
+            If True, regenerate GIF even when output file already exists.
+            Default is False.
 
         Returns
         -------
@@ -4146,7 +3587,7 @@ class TractographyVisualizer:
         gif_filename = output_dir / f"{name}.gif"
 
         # Skip if file already exists
-        if gif_filename.exists():
+        if gif_filename.exists() and not overwrite:
             logger.debug("Skipping generation of %s (file already exists)", gif_filename)
             return gif_filename
 
@@ -4164,14 +3605,8 @@ class TractographyVisualizer:
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
 
-            # Filter streamlines if requested (to avoid VTK segfaults)
-            tract_streamlines = self._filter_streamlines(
-                tract_streamlines,
-                max_streamlines=max_streamlines,
-                subsample_factor=subsample_factor,
-                max_points_per_streamline=max_points_per_streamline,
-                resample_streamlines=resample_streamlines,
-            )
+            # Downsample points (to avoid VTK segfaults)
+            tract_streamlines = self._downsample_streamlines(tract_streamlines)
 
             # Create initial actors with error handling for std::bad_alloc
             try:
@@ -4319,6 +3754,7 @@ class TractographyVisualizer:
         mp4_path: str | Path | None = None,
         *,
         fps: int = 10,
+        overwrite: bool = False,
     ) -> Path:
         """Convert a GIF file to MP4 format.
 
@@ -4331,6 +3767,9 @@ class TractographyVisualizer:
             with .mp4 extension.
         fps : int, optional
             Frames per second for the video. Default is 10.
+        overwrite : bool, optional
+            If True, overwrite MP4 even when output file already exists.
+            Default is False.
 
         Returns
         -------
@@ -4352,7 +3791,7 @@ class TractographyVisualizer:
             mp4_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Skip if file already exists
-        if mp4_path.exists():
+        if mp4_path.exists() and not overwrite:
             logger.debug("Skipping conversion of %s to %s (file already exists)", gif_path, mp4_path)
             return mp4_path
 
@@ -4385,6 +3824,7 @@ class TractographyVisualizer:
         ref_file: str | Path | None = None,  # Alias for ref_img
         output_dir: str | Path | None = None,
         remove_gifs: bool = True,
+        overwrite: bool = False,
         max_streamlines: int | None = None,
         subsample_factor: float | None = None,
         max_points_per_streamline: int | None = None,
@@ -4404,6 +3844,17 @@ class TractographyVisualizer:
             initialization.
         remove_gifs : bool, optional
             Whether to remove intermediate GIF files. Default is True.
+        overwrite : bool, optional
+            If True, regenerate videos even when output files already exist.
+            Default is False.
+        max_streamlines : int | None, optional
+            Passed through to :meth:`generate_gif`. Maximum streamlines per tract.
+        subsample_factor : float | None, optional
+            Passed through to :meth:`generate_gif`. Fraction of streamlines to keep.
+        max_points_per_streamline : int | None, optional
+            Passed through to :meth:`generate_gif`. Max points per streamline.
+        resample_streamlines : bool, optional
+            Passed through to :meth:`generate_gif`. Whether to resample streamlines.
 
         Returns
         -------
@@ -4456,7 +3907,7 @@ class TractographyVisualizer:
                 tract_mp4 = output_dir / f"{tract_name}.mp4"
 
                 # Skip if MP4 already exists
-                if tract_mp4.exists():
+                if tract_mp4.exists() and not overwrite:
                     logger.debug("Skipping generation of %s (file already exists)", tract_mp4)
                     tract_videos[tract_name] = tract_mp4
                     continue
@@ -4470,8 +3921,9 @@ class TractographyVisualizer:
                     subsample_factor=subsample_factor,
                     max_points_per_streamline=max_points_per_streamline,
                     resample_streamlines=resample_streamlines,
+                    overwrite=overwrite,
                 )
-                self.convert_gif_to_mp4(tract_gif, tract_mp4)
+                self.convert_gif_to_mp4(tract_gif, tract_mp4, overwrite=overwrite)
 
                 if remove_gifs:
                     tract_gif.unlink()
@@ -4586,53 +4038,58 @@ class TractographyVisualizer:
                         )
                         errors.append(f"Anatomical views: {error_msg_short}")
 
-            # 2. CCI calculation and visualization
+            # 2. CCI calculation and visualization (histogram + before/after CCI views)
             if "cci" not in skip_checks:
                 try:
-                    # Calculate CCI to get metrics
                     cci_values = None
+                    keep_cci = None
                     keep_tract = None
+                    long_streamlines = None
                     try:
-                        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
-                        tract.to_rasmm()
-                        cci_values, keep_tract = self.calc_cci(tract, ref_img=subject_ref_img)
+                        cci_values, keep_cci, keep_tract, long_streamlines = self.calc_cci(
+                            tract_file,
+                            ref_img=subject_ref_img,
+                        )
                         if len(cci_values) > 0:
                             metrics["cci_mean"] = float(np.mean(cci_values))
                             metrics["cci_median"] = float(np.median(cci_values))
                             metrics["cci_min"] = float(np.min(cci_values))
                             metrics["cci_max"] = float(np.max(cci_values))
-                            metrics["cci_after_filter_count"] = len(cci_values)
+                            metrics["cci_after_filter_count"] = len(keep_cci)
                             metrics["cci_removed_count"] = (
-                                metrics.get("initial_streamline_count", 0) - len(cci_values)
+                                metrics.get("initial_streamline_count", 0) - len(keep_cci)
                                 if metrics.get("initial_streamline_count") is not None
                                 else None
                             )
                         else:
                             metrics["cci_after_filter_count"] = 0
                             missing_data.append("CCI: No streamlines after filtering")
-                        # Delete tract after calc_cci, but keep cci_values and keep_tract for plotting
-                        del tract
-                        gc.collect()
                     except (OSError, ValueError, RuntimeError, InvalidInputError, TractographyVisualizationError) as e:
                         logger.warning("Failed to calculate CCI metrics: %s", e)
                         errors.append(f"CCI metrics calculation failed: {e!s}")
 
-                    # Plot CCI if we have valid data
+                    # Histogram + before/after CCI views (reuse precomputed CCI/tracts)
                     if cci_values is not None and keep_tract is not None and len(cci_values) > 0:
-                        hist_file = tract_output_dir / "cci_histogram.png"
-                        cci_plots = self.plot_cci(
-                            cci_values,
-                            keep_tract,
-                            hist_file,
+                        cci_result = self.compare_before_after_cci(
+                            tract_file,
                             ref_img=subject_ref_img,
                             output_dir=tract_output_dir,
+                            cci=cci_values,
+                            keep_cci=keep_cci,
+                            keep_tract=keep_tract,
+                            long_streamlines=long_streamlines,
                             **subject_merged_kwargs,
                         )
-                        # Add CCI plots to results
-                        for plot_type, plot_path in cci_plots.items():
-                            tract_results[f"cci_{plot_type}"] = plot_path
-                        # Clean up after plotting
-                        del cci_values, keep_tract
+                        hist_path = cci_result["histogram"]
+                        if isinstance(hist_path, Path):
+                            tract_results["cci_histogram"] = hist_path
+                        for view_name in ("coronal", "axial", "sagittal"):
+                            view_data = cci_result.get(view_name)
+                            if isinstance(view_data, dict):
+                                tract_results[f"before_cci_{view_name}"] = view_data["before"]
+                                tract_results[f"after_cci_{view_name}"] = view_data["after"]
+                                tract_results[f"cci_{view_name}"] = view_data["after"]
+                        del cci_values, keep_cci, keep_tract, long_streamlines
                         gc.collect()
                 except (OSError, ValueError, RuntimeError, MemoryError) as e:
                     error_msg = str(e).lower()
@@ -4675,60 +4132,6 @@ class TractographyVisualizer:
                             tract_name,
                         )
                         errors.append(f"CCI visualization: {error_msg_short}")
-
-            # 3. Before/after CCI comparison
-            if "before_after_cci" not in skip_checks:
-                try:
-                    before_after_views = self.compare_before_after_cci(
-                        tract_file,
-                        output_dir=tract_output_dir,
-                        ref_img=subject_ref_img,
-                        **subject_merged_kwargs,
-                    )
-                    # Add before/after views to results
-                    for view_name, view_path in before_after_views.items():
-                        tract_results[f"before_after_cci_{view_name}"] = view_path
-                except (OSError, ValueError, RuntimeError, MemoryError) as e:
-                    error_msg = str(e).lower()
-                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        logger.exception(
-                            "Memory allocation failed (likely std::bad_alloc) when generating before/after CCI comparison for %s/%s. "
-                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
-                            subject_id,
-                            tract_name,
-                        )
-                    else:
-                        error_msg_short = str(e)[:100]
-                        logger.warning(
-                            "Failed to generate before/after CCI comparison for %s/%s: %s",
-                            subject_id,
-                            tract_name,
-                            e,
-                        )
-                        errors.append(f"Before/after CCI: {error_msg_short}")
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    error_msg_short = str(e)[:100]
-                    if (
-                        "bad_alloc" in error_msg
-                        or "memory" in error_msg
-                        or "allocation" in error_msg
-                        or "terminate" in error_msg
-                    ):
-                        logger.exception(
-                            "Memory allocation failed (likely std::bad_alloc) when generating before/after CCI comparison for %s/%s. "
-                            "Try reducing image resolution, filtering streamlines, or using n_jobs=1.",
-                            subject_id,
-                            tract_name,
-                        )
-                        errors.append(f"Before/after CCI: Memory error ({error_msg_short})")
-                    else:
-                        logger.exception(
-                            "Unexpected error generating before/after CCI comparison for %s/%s",
-                            subject_id,
-                            tract_name,
-                        )
-                        errors.append(f"Before/after CCI: {error_msg_short}")
 
             # 4. Atlas comparison (uses MNI space tracts for subject views)
             if "atlas_comparison" not in skip_checks and atlas_files is not None and tract_name in atlas_files:
@@ -4998,6 +4401,7 @@ class TractographyVisualizer:
         n_jobs: int | None = None,
         subject_kwargs: dict[str, Any] | None = None,
         atlas_kwargs: dict[str, Any] | None = None,
+        overwrite: bool = False,
         **kwargs: Any,
     ) -> dict[str, dict[str, dict[str, str | Path]]]:
         """Run comprehensive quality checks for multiple subjects and tracts.
@@ -5123,6 +4527,9 @@ class TractographyVisualizer:
             Additional keyword arguments passed only to atlas visualization methods
             (e.g., `generate_atlas_views`). These kwargs are NOT passed to subject
             visualization methods. If None, atlas methods use default parameters.
+        overwrite : bool, optional
+            If True, regenerate all images even when output files already exist.
+            Passed to all quality check methods. Default is False.
         **kwargs
             Additional keyword arguments passed to ALL quality check methods
             (both subject and atlas). Use `subject_kwargs` or `atlas_kwargs` to
@@ -5186,6 +4593,9 @@ class TractographyVisualizer:
         ...     html_output="quality_report.html",
         ... )
         """
+        # Merge overwrite into kwargs so all quality check methods receive it
+        kwargs = dict(overwrite=overwrite, **kwargs)
+
         # Initialize XVFB (X Virtual Framebuffer) if requested for headless environments
         vdisplay = None
         if os.environ.get("XVFB", "").lower() in ("1", "true", "yes"):

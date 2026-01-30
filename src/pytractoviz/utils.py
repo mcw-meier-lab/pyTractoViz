@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -10,12 +10,8 @@ if TYPE_CHECKING:
     from dipy.tracking.streamline import Streamlines
     from fury import window
 
-# Standard anatomical view angles (elevation, azimuth, roll)
-ANATOMICAL_VIEW_ANGLES = {
-    "coronal": (-90.0, 0.0, 0.0),  # Front view
-    "axial": (0.0, 180.0, 0.0),  # Top-down view
-    "sagittal": (-90.0, 0.0, 90.0),  # Side view (right)
-}
+# Valid anatomical view names (used for iteration and validation; camera is set in set_anatomical_camera)
+ANATOMICAL_VIEW_NAMES: tuple[str, ...] = ("coronal", "axial", "sagittal")
 
 
 def calculate_centroid(streamlines: Streamlines) -> np.ndarray:
@@ -189,6 +185,7 @@ def set_anatomical_camera(
     *,
     camera_distance: float | None = None,
     bbox_size: np.ndarray | None = None,
+    template_space: Literal["ras", "mni"] = "ras",
 ) -> None:
     """Set camera position for standard anatomical views.
 
@@ -207,38 +204,50 @@ def set_anatomical_camera(
         Distance of camera from centroid. If None, calculated from bbox_size.
     bbox_size : np.ndarray | None, optional
         Bounding box size of streamlines. Used to calculate camera_distance if not provided.
+    template_space : {"ras", "mni"}, optional
+        Coordinate convention for the template. Use "ras" for standard RAS (e.g. native T1).
+        Use "mni" for MNI-space templates, which uses opposite camera sides so left/right
+        and superior/inferior match radiological convention. Default is "ras".
 
     Raises
     ------
     ValueError
         If view_name is not one of the standard anatomical views.
     """
+    if view_name not in ANATOMICAL_VIEW_NAMES:
+        raise ValueError(
+            f"Invalid view name: {view_name}. Must be one of: {list(ANATOMICAL_VIEW_NAMES)}",
+        )
+
     # Calculate camera distance if not provided
     if camera_distance is None:
         max_dim = np.max(bbox_size) if bbox_size is not None else 100.0
         camera_distance = max_dim * 2.5
 
-    # Define camera positions and view_up vectors for each anatomical view
+    use_mni = template_space == "mni"
+
+    # Define camera positions and view_up vectors for each anatomical view.
+    # RAS: camera from posterior (-Y) coronal, from +Z axial, from -X sagittal.
+    # MNI: flip camera side so anatomy matches radiological convention (anterior +Y, etc.).
     if view_name == "coronal":
-        # Coronal: front view (anterior), looking posterior
-        # Camera from posterior (-Y) to flip left/right, looking at centroid
-        camera_position = centroid + np.array([0, -camera_distance, 0])
+        if use_mni:
+            camera_position = centroid + np.array([0, camera_distance, 0])  # From anterior (+Y)
+        else:
+            camera_position = centroid + np.array([0, -camera_distance, 0])  # From posterior (-Y)
         view_up = np.array([0, 0, 1])  # Superior is up
     elif view_name == "axial":
-        # Axial: top-down view (superior), looking inferior
-        # Camera from superior (+Z), looking at centroid
-        # Use -Y as view_up to flip left/right (instead of +Y)
-        camera_position = centroid + np.array([0, 0, camera_distance])
-        view_up = np.array([0, -1, 0])  # Posterior as up (flips left/right)
-    elif view_name == "sagittal":
-        # Sagittal: side view (left), looking right
-        # Camera from left (-X), looking at centroid
-        camera_position = centroid + np.array([-camera_distance, 0, 0])
+        if use_mni:
+            camera_position = centroid + np.array([0, 0, camera_distance])  # From inferior (+Z)
+            view_up = np.array([0, 1, 0])  # Anterior as up
+        else:
+            camera_position = centroid + np.array([0, 0, camera_distance])  # From superior (+Z)
+            view_up = np.array([0, -1, 0])  # Posterior as up (flips left/right)
+    else:  # sagittal
+        if use_mni:
+            camera_position = centroid + np.array([camera_distance, 0, 0])  # From right (+X)
+        else:
+            camera_position = centroid + np.array([-camera_distance, 0, 0])  # From left (-X)
         view_up = np.array([0, 0, 1])  # Superior is up
-    else:
-        raise ValueError(
-            f"Invalid view name: {view_name}. Must be one of: coronal, axial, sagittal",
-        )
 
     # Set camera
     scene.set_camera(

@@ -140,7 +140,7 @@ def test_api_matches_inventory(inventory: Inventory, public_objects: list[griffe
     # and module-level variables that are implementation details
     ignore_paths = {
         "pytractoviz.viz.logger",  # Internal logger, not part of public API
-        "pytractoviz.utils.ANATOMICAL_VIEW_ANGLES",  # Module-level constant, may not be in inventory
+        "pytractoviz.utils.ANATOMICAL_VIEW_NAMES",  # Module-level constant, may not be in inventory
         "pytractoviz.viz.MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD",  # Internal constant for memory estimation
         "pytractoviz.viz.DENSE_TRACT_POINT_THRESHOLD",  # Internal constant for memory warnings
         "pytractoviz.viz.VERY_LONG_STREAMLINE_POINT_THRESHOLD",  # Internal constant for memory warnings
