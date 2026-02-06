@@ -6,7 +6,19 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
+# Substrings that indicate template/standard space (e.g. MNI) in file paths.
+# Used to infer camera convention (template_space="mni") when not set explicitly.
+TEMPLATE_SPACE_INDICATORS: tuple[str, ...] = (
+    "mni",
+    "talairach",
+    "colin27",
+    "tpl-",  # BIDS template prefix (e.g. tpl-MNI152NLin2009cAsym)
+    "space-mni",  # BIDS space suffix
+)
+
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from dipy.tracking.streamline import Streamlines
     from fury import window
 
@@ -176,6 +188,30 @@ def calculate_combined_bbox_size(*streamlines_groups: Streamlines) -> np.ndarray
         all_points_list.append(np.vstack([np.array(sl) for sl in streamlines]))
     all_points = np.vstack(all_points_list)
     return np.max(all_points, axis=0) - np.min(all_points, axis=0)
+
+
+def infer_template_space_from_paths(*paths: str | Path) -> Literal["ras", "mni"]:
+    """Infer template space (camera convention) from file path(s).
+
+    If any path contains a known template/standard-space indicator (e.g. MNI,
+    Talairach, BIDS template prefix), returns ``"mni"`` so the camera uses
+    radiological convention. Otherwise returns ``"ras"``.
+
+    Not all template-aligned files include these substrings; when in doubt,
+    pass ``template_space`` explicitly to the visualization method.
+
+    Parameters
+    ----------
+    *paths : str or Path
+        One or more file paths (e.g. atlas file, reference image) to check.
+
+    Returns
+    -------
+    {"ras", "mni"}
+        ``"mni"`` if any path suggests template space, else ``"ras"``.
+    """
+    combined = " ".join(str(p).lower() for p in paths if p is not None)
+    return "mni" if any(ind in combined for ind in TEMPLATE_SPACE_INDICATORS) else "ras"
 
 
 def set_anatomical_camera(

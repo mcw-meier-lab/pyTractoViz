@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -15,11 +16,13 @@ except ImportError:
 
 from pytractoviz.utils import (
     ANATOMICAL_VIEW_NAMES,
+    TEMPLATE_SPACE_INDICATORS,
     calculate_bbox_size,
     calculate_centroid,
     calculate_combined_bbox_size,
     calculate_combined_centroid,
     calculate_direction_colors,
+    infer_template_space_from_paths,
     set_anatomical_camera,
 )
 
@@ -509,3 +512,52 @@ class TestSetAnatomicalCamera:
         call_kwargs = mock_scene.set_camera.call_args[1]
         position = call_kwargs["position"]
         assert position[0] > centroid[0]  # +X
+
+
+class TestInferTemplateSpaceFromPaths:
+    """Test infer_template_space_from_paths function."""
+
+    def test_returns_ras_when_no_indicators(self) -> None:
+        """Paths without template indicators return 'ras'."""
+        assert infer_template_space_from_paths("sub-01_t1w.nii.gz") == "ras"
+        assert infer_template_space_from_paths("/path/to/brain_mask.nii.gz") == "ras"
+        assert infer_template_space_from_paths(Path("native_t1.nii")) == "ras"
+
+    def test_returns_mni_when_mni_in_path(self) -> None:
+        """Paths containing 'mni' (case-insensitive) return 'mni'."""
+        assert infer_template_space_from_paths("tpl-MNI152NLin2009cAsym_res-01_desc-brain_mask.nii.gz") == "mni"
+        assert infer_template_space_from_paths("mni_icbm152.nii.gz") == "mni"
+        assert infer_template_space_from_paths("MNI305_brain.nii") == "mni"
+
+    def test_returns_mni_when_multiple_paths_and_one_has_indicator(self) -> None:
+        """If any path has a template indicator, returns 'mni'."""
+        assert infer_template_space_from_paths("atlas.nii.gz", "tpl-MNI152_brain.nii.gz") == "mni"
+        assert infer_template_space_from_paths("t1w.nii", "talairach_template.nii") == "mni"
+
+    def test_returns_ras_when_both_paths_have_no_indicator(self) -> None:
+        """All paths without indicators return 'ras'."""
+        assert infer_template_space_from_paths("sub-01_t1.nii.gz", "sub-01_mask.nii.gz") == "ras"
+
+    def test_returns_mni_for_tpl_prefix(self) -> None:
+        """BIDS template prefix 'tpl-' triggers 'mni'."""
+        assert infer_template_space_from_paths("tpl-other_template.nii.gz") == "mni"
+
+    def test_returns_mni_for_space_mni(self) -> None:
+        """BIDS space-mni suffix triggers 'mni'."""
+        assert infer_template_space_from_paths("sub-01_space-MNI152_desc-mask.nii.gz") == "mni"
+
+    def test_returns_mni_for_talairach(self) -> None:
+        """Path containing 'talairach' returns 'mni'."""
+        assert infer_template_space_from_paths("talairach_template.nii") == "mni"
+
+    def test_returns_mni_for_colin27(self) -> None:
+        """Path containing 'colin27' returns 'mni'."""
+        assert infer_template_space_from_paths("colin27_brain.nii.gz") == "mni"
+
+    def test_template_space_indicators_defined(self) -> None:
+        """TEMPLATE_SPACE_INDICATORS is a non-empty tuple of strings."""
+        assert isinstance(TEMPLATE_SPACE_INDICATORS, tuple)
+        assert len(TEMPLATE_SPACE_INDICATORS) > 0
+        for ind in TEMPLATE_SPACE_INDICATORS:
+            assert isinstance(ind, str)
+            assert len(ind) > 0

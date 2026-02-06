@@ -13,7 +13,7 @@ import sys
 import tracemalloc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 try:
     import psutil
@@ -25,6 +25,9 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import vtk
+from dipy.align.imwarp import SymmetricDiffeomorphicRegistration
+from dipy.align.metrics import CCMetric
+from dipy.io.image import load_nifti
 from dipy.io.stateful_tractogram import Space, StatefulTractogram
 from dipy.io.streamline import load_trk
 from dipy.segment.bundles import bundle_shape_similarity
@@ -43,6 +46,7 @@ from dipy.tracking.streamline import (
 from dipy.tracking.utils import length
 from fury import actor, window
 from fury.colormap import create_colormap
+from nibabel.affines import apply_affine
 from scipy.spatial.transform import Rotation
 from xvfbwrapper import Xvfb
 
@@ -54,10 +58,74 @@ from pytractoviz.utils import (
     calculate_combined_bbox_size,
     calculate_combined_centroid,
     calculate_direction_colors,
+    infer_template_space_from_paths,
     set_anatomical_camera,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Minimum number of suffixes required for .nii.gz (e.g. [".nii", ".gz"])
+_MIN_SUFFIXES_FOR_NII_GZ = 2
+# Threshold for binary ROI mask (voxel center offset uses 0.5 elsewhere)
+_ROI_BINARY_THRESHOLD = 0.5
+
+
+def _is_nifti_atlas(path: str | Path) -> bool:
+    """Return True if path has a NIfTI atlas extension (.nii or .nii.gz)."""
+    p = Path(path)
+    return (
+        p.suffix == ".nii"
+        or (
+            p.suffix == ".gz"
+            and len(p.suffixes) >= _MIN_SUFFIXES_FOR_NII_GZ
+            and p.suffixes[-2] == ".nii"
+        )
+    )
+
+
+def _prepare_atlas_roi_for_views(
+    atlas_file: str | Path,
+    ref_img_path: str | Path,
+    atlas_threshold: float = 10.0,
+) -> np.ndarray:
+    """Load NIfTI atlas and align to reference image via affine registration.
+
+    An affine registration (DIPY) aligns the atlas to the reference (brain) image;
+    the ROI is then resampled to the reference grid. Optionally, the ROI is masked
+    to voxels inside the brain (reference above threshold) and smoothed to reduce
+    pixelation of the contour surface.
+
+    Parameters
+    ----------
+    atlas_file : str | Path
+        Path to the NIfTI atlas (label or binary ROI).
+    ref_img_path : str | Path
+        Path to the reference brain image (same space as the scene).
+    atlas_threshold : float, optional
+        Threshold for the atlas image to define the ROI. Voxels with
+        atlas_data > atlas_threshold are considered inside the ROI. Default is 10.0.
+
+    Returns
+    -------
+    np.ndarray
+        3D float array, binary (0/1) in ref space.
+    """
+    atlas_img, atlas_affine = load_nifti(str(atlas_file))
+    ref_img, ref_affine = load_nifti(str(ref_img_path))
+    metric = CCMetric(3)
+    level_iters = [10, 10, 5]
+    sdr = SymmetricDiffeomorphicRegistration(metric, level_iters=level_iters)
+    mapping = sdr.optimize(
+        ref_img,
+        atlas_img,
+        static_grid2world=ref_affine,
+        moving_grid2world=atlas_affine,
+    )
+
+    warped_atlas = mapping.transform(atlas_img)
+    return (warped_atlas > atlas_threshold).astype(np.float32)
+
 
 # Constants for memory estimation and warnings
 MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD = 10000  # Streamlines with >10k points risk fragmentation
@@ -512,7 +580,6 @@ def _process_tract_worker(
     metric_files: dict[str, dict[str, str | Path]] | None,
     atlas_ref_img: str | Path | None,
     *,
-    flip_lr: bool,
     skip_checks: list[str],
     visualizer_params: dict[str, Any],
     subject_kwargs: dict[str, Any] | None = None,
@@ -575,7 +642,6 @@ def _process_tract_worker(
                 atlas_files=atlas_files,
                 metric_files=metric_files,
                 atlas_ref_img=atlas_ref_img,
-                flip_lr=flip_lr,
                 skip_checks=skip_checks,
                 subject_kwargs=subject_kwargs,
                 atlas_kwargs=atlas_kwargs,
@@ -1329,7 +1395,6 @@ class TractographyVisualizer:
         output_dir: str | Path | None = None,
         figure_size: tuple[int, int] | None = None,
         show_glass_brain: bool = True,
-        flip_lr: bool = False,
         overwrite: bool = False,
     ) -> dict[str, Path]:
         """Generate snapshots from standard anatomical views.
@@ -1354,11 +1419,6 @@ class TractographyVisualizer:
             set during initialization (default: (800, 800)). Default is None.
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
-        flip_lr : bool, optional
-            Whether to flip left-right (X-axis) when transforming tract.
-            This may be needed for some coordinate conventions or file formats
-            where the left-right orientation differs (e.g., when working with
-            MNI space). Default is False.
         overwrite : bool, optional
             If True, regenerate images even when output files already exist.
             Default is False.
@@ -1455,20 +1515,6 @@ class TractographyVisualizer:
                 tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
-
-            # Apply left-right flip if needed (common when tract is in MNI space)
-            if flip_lr:
-                # Flip X-axis (left-right) by negating X coordinates
-                # This is needed when MNI and native space have different L/R conventions
-                if not tract_streamlines or len(tract_streamlines) == 0:
-                    logger.warning(
-                        "Tract has 0 streamlines before flip. Skipping visualization for %s",
-                        tract_file,
-                    )
-                    return {}
-                tract_streamlines = Streamlines(
-                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in tract_streamlines],
-                )
 
             # Filter streamlines if requested (to avoid VTK segfaults)
             tract_streamlines = self._downsample_streamlines(tract_streamlines)
@@ -1701,7 +1747,6 @@ class TractographyVisualizer:
         ref_img: str | Path | None = None,
         *,
         show_glass_brain: bool = True,
-        flip_lr: bool = False,
         window_size: tuple[int, int] = (800, 800),
         max_streamlines: int | None = None,  # noqa: ARG002
         subsample_factor: float | None = None,  # noqa: ARG002
@@ -1722,11 +1767,6 @@ class TractographyVisualizer:
             set during initialization or via `set_reference_image()`.
         show_glass_brain : bool, optional
             Whether to show the glass brain outline. Default is True.
-        flip_lr : bool, optional
-            Whether to flip left-right (X-axis) when transforming tract.
-            This may be needed for some coordinate conventions or file formats
-            where the left-right orientation differs (e.g., when working with
-            MNI space). Default is False.
         window_size : tuple[int, int], optional
             Size of the interactive window in pixels. Default is (800, 800).
 
@@ -1768,15 +1808,6 @@ class TractographyVisualizer:
                 tract.streamlines,
                 np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
             )
-
-            # Apply left-right flip if needed
-            if flip_lr:
-                if not tract_streamlines or len(tract_streamlines) == 0:
-                    logger.warning("Tract has 0 streamlines before flip. Skipping visualization.")
-                    return
-                tract_streamlines = Streamlines(
-                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in tract_streamlines],
-                )
 
             # Filter streamlines if requested
             tract_streamlines = self._downsample_streamlines(tract_streamlines)
@@ -1831,34 +1862,35 @@ class TractographyVisualizer:
         *,
         atlas_ref_img: str | Path | None = None,
         ref_img: str | Path | None = None,  # Alias for atlas_ref_img
-        flip_lr: bool = False,
         views: list[str] | None = None,
         output_dir: str | Path | None = None,
         figure_size: tuple[int, int] = (800, 800),
         show_glass_brain: bool = True,
         atlas_name: str | None = None,
         overwrite: bool = False,
+        atlas_threshold: float = 10.0,
+        template_space: Literal["ras", "mni"] | None = None,
     ) -> dict[str, Path]:
-        """Generate anatomical views for an atlas tract.
+        """Generate anatomical views for an atlas tract or NIfTI ROI.
 
-        Creates static images from coronal, axial, and sagittal views of the atlas
-        tract. This is useful for comparing subject tracts to atlas tracts using
+        Creates static images from coronal, axial, and sagittal views of the atlas.
+        Supports two formats:
+        - **TRK**: Atlas tractography file (streamlines). Rendered as 3D lines.
+        - **NIfTI** (``.nii`` / ``.nii.gz``): Label or binary ROI volume. Rendered
+          as a surface contour via ``actor.contour_from_roi``.
+
+        This is useful for comparing subject tracts to atlas tracts using
         the same viewing angles.
 
         Parameters
         ----------
         atlas_file : str | Path
-            Path to the atlas tractography file.
+            Path to the atlas file: tractography (``.trk``) or NIfTI ROI (``.nii`` / ``.nii.gz``).
         atlas_ref_img : str | Path | None, optional
             Path to the reference image that matches the atlas coordinate space
             (e.g., MNI template if atlas is in MNI space).
             This is important if the atlas is in a different space (e.g., MNI)
             than the subject reference image.
-        flip_lr: bool, optional
-            Whether to flip left-right (X-axis) when transforming atlas.
-            This may be needed for some coordinate conventions or file formats
-            where the left-right orientation differs. Try this if the atlas
-            appears on the wrong side compared to the subject. Default is False.
         views : list[str] | None, optional
             List of views to generate. Options: "coronal", "axial", "sagittal".
             If None, generates all three views. Default is None.
@@ -1875,6 +1907,28 @@ class TractographyVisualizer:
         overwrite : bool, optional
             If True, regenerate images even when output files already exist.
             Default is False.
+        mask_atlas_roi_to_brain : bool, optional
+            For NIfTI atlases only: if True, restrict the ROI to voxels inside
+            the brain (reference image above threshold) so the contour does not
+            extend outside the brain. Ignored for TRK atlases. Default is True.
+        atlas_roi_brain_threshold : float | None, optional
+            For NIfTI atlases only: threshold for the reference image to define
+            the brain mask (voxels with ref > threshold are inside the brain).
+            If None, uses the 5th percentile of nonzero reference voxels to
+            exclude background. Ignored for TRK atlases or if
+            ``mask_atlas_roi_to_brain`` is False.
+        atlas_roi_smooth_sigma : float, optional
+            For NIfTI atlases only: sigma (voxels) for Gaussian smoothing of the
+            ROI before rendering the contour. Reduces pixelation; 0 disables.
+            Default is 1.0. Ignored for TRK atlases.
+        template_space : {"ras", "mni"} or None, optional
+            Camera convention for anatomical views. Use ``"mni"`` for
+            template/standard space (e.g. MNI, Talairach) so left/right match
+            radiological convention; use ``"ras"`` for native RAS. If None,
+            inferred from atlas file and reference image paths (e.g. "MNI",
+            "talairach", "tpl-", "space-mni"). Pass explicitly when your
+            template-aligned files do not include these in the path.
+            Default is None.
 
         Returns
         -------
@@ -1896,8 +1950,10 @@ class TractographyVisualizer:
         >>> visualizer = TractographyVisualizer(
         ...     reference_image="t1w.nii.gz", output_directory="output/"
         ... )
-        >>> # Generate all atlas views
+        >>> # Generate all atlas views (TRK streamlines)
         >>> atlas_views = visualizer.generate_atlas_views("atlas_tract.trk")
+        >>> # NIfTI ROI atlas (rendered as contour surface)
+        >>> atlas_views = visualizer.generate_atlas_views("atlas_roi.nii.gz")
         >>> # Generate specific views
         >>> atlas_views = visualizer.generate_atlas_views(
         ...     "atlas_tract.trk", views=["coronal", "axial"]
@@ -1909,6 +1965,11 @@ class TractographyVisualizer:
         if atlas_ref_img is None and ref_img is not None:
             atlas_ref_img = ref_img
         atlas_ref_img = self._reference_image if atlas_ref_img is None else Path(atlas_ref_img)
+        if template_space is None:
+            if atlas_ref_img is not None:
+                template_space = infer_template_space_from_paths(atlas_ref_img, atlas_file)
+            else:
+                template_space = "ras"
 
         # Determine which views to generate
         if views is None:
@@ -1954,146 +2015,218 @@ class TractographyVisualizer:
             return generated_views
 
         try:
-            # Load atlas tract only if we need to generate at least one view
-            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
-            atlas_tract.to_rasmm()
+            if _is_nifti_atlas(atlas_file):
+                if atlas_ref_img is None:
+                    raise InvalidInputError(
+                        "Reference image is required for NIfTI atlas views. "
+                        "Set it via constructor, set_reference_image(), or pass atlas_ref_img=.",
+                    )
+                # NIfTI atlas: use ROI contour for visualization
+                roi_data = _prepare_atlas_roi_for_views(
+                    atlas_file,
+                    atlas_ref_img,
+                    atlas_threshold=atlas_threshold,
+                )
+                atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+                # Nibabel image types have .affine; cast for type checker (load returns FileBasedImage)
+                ref_affine = cast("np.ndarray", cast("Any", atlas_ref_img_obj).affine)
+                # Centroid and bbox for camera: use ref affine to convert ROI voxels to world
+                roi_voxels = np.argwhere(roi_data > _ROI_BINARY_THRESHOLD)
+                if roi_voxels.size > 0:
+                    vox_centers = roi_voxels.astype(np.float64) + 0.5
+                    world_pts = apply_affine(ref_affine, vox_centers)
+                    centroid = np.mean(world_pts, axis=0)
+                    bbox_size = np.ptp(world_pts, axis=0)
+                else:
+                    # Fallback: center of volume and diagonal extent
+                    shape = np.array(roi_data.shape, dtype=np.float64)
+                    centroid = apply_affine(ref_affine, (shape - 1) / 2)
+                    bbox_size = np.abs(np.diag(ref_affine)[:3]) * shape
 
-            # Load reference image
-            atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+                atlas_roi_color = (0.0, 1.0, 1.0)
+                atlas_roi_opacity = 0.1
+                for view_name in views_to_generate:
+                    output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
+                    if output_image.exists() and not overwrite:
+                        continue
+                    scene, _ = self._create_scene(
+                        ref_img=atlas_ref_img,
+                        show_glass_brain=show_glass_brain,
+                    )
+                    try:
+                        roi_actor = actor.contour_from_roi(
+                            roi_data,
+                            color=atlas_roi_color,
+                            opacity=atlas_roi_opacity,
+                        )
+                        scene.add(roi_actor)
+                    except (TypeError, RuntimeError) as e:
+                        error_msg = str(e).lower()
+                        if "affine" in error_msg or "bad_alloc" in error_msg:
+                            logger.exception(
+                                "Failed to create atlas ROI contour for view %s",
+                                view_name,
+                            )
+                            scene.clear()
+                            del scene
+                            gc.collect()
+                            continue
+                        raise
+                    self._set_anatomical_camera(
+                        scene,
+                        centroid,
+                        view_name,
+                        bbox_size=bbox_size,
+                        template_space=template_space,
+                    )
+                    try:
+                        window.record(
+                            scene=scene,
+                            out_path=str(output_image),
+                            size=figure_size,
+                        )
+                        generated_views[view_name] = output_image
+                    except RuntimeError as e:
+                        error_msg = str(e).lower()
+                        if "bad_alloc" in error_msg or "memory" in error_msg:
+                            logger.exception(
+                                "VTK memory allocation failed during atlas ROI rendering for view %s",
+                                view_name,
+                            )
+                            scene.clear()
+                            del scene
+                            gc.collect()
+                            continue
+                        raise
+                    scene.clear()
+                    del roi_actor
+                    del scene
+                    gc.collect()
+            else:
+                # TRK atlas: use streamlines for visualization
+                # Load atlas tract only if we need to generate at least one view
+                atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+                atlas_tract.to_rasmm()
 
-            # Transform atlas streamlines to visualization reference space
-            # The atlas tract is already in RASMM after to_rasmm(), so we transform
-            # directly to the visualization reference space
-            atlas_streamlines = transform_streamlines(
-                atlas_tract.streamlines,
-                np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
-            )
+                # Load reference image
+                atlas_ref_img_obj = nib.load(str(atlas_ref_img))
 
-            # Apply left-right flip if needed (common when atlas is in MNI space)
-            if flip_lr:
-                # Flip X-axis (left-right) by negating X coordinates
-                # This is needed when MNI and native space have different L/R conventions
+                # Transform atlas streamlines to visualization reference space
+                # The atlas tract is already in RASMM after to_rasmm(), so we transform
+                # directly to the visualization reference space
+                atlas_streamlines = transform_streamlines(
+                    atlas_tract.streamlines,
+                    np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+                )
+
+                # Filter streamlines if requested (to avoid VTK segfaults)
+                atlas_streamlines = self._downsample_streamlines(
+                    atlas_streamlines,
+                    approx_points=0.25,
+                )
+
+                # Check if streamlines are empty after filtering
                 if not atlas_streamlines or len(atlas_streamlines) == 0:
                     logger.warning(
-                        "Atlas tract has 0 streamlines before flip. Skipping visualization for %s",
+                        "Atlas tract has 0 streamlines after filtering. Skipping visualization for %s",
                         atlas_file,
                     )
                     return {}
-                atlas_streamlines = Streamlines(
-                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
-                )
 
-                # Also update centroid after flip
-                all_points = np.vstack([np.array(sl) for sl in atlas_streamlines])
-                centroid = np.mean(all_points, axis=0)
+                # Calculate colors based on streamline directions using utility function
+                streamline_colors = calculate_direction_colors(atlas_streamlines)
 
-            # Filter streamlines if requested (to avoid VTK segfaults)
-            atlas_streamlines = self._downsample_streamlines(
-                atlas_streamlines,
-                approx_points=0.25,
-            )
+                # Get centroid using utility function (recalculate after any transformations)
+                centroid = calculate_centroid(atlas_streamlines)
 
-            # Check if streamlines are empty after filtering
-            if not atlas_streamlines or len(atlas_streamlines) == 0:
-                logger.warning(
-                    "Atlas tract has 0 streamlines after filtering. Skipping visualization for %s",
-                    atlas_file,
-                )
-                return {}
+                # Generate each requested view
+                for view_name in views_to_generate:
+                    output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
 
-            # Calculate colors based on streamline directions using utility function
-            streamline_colors = calculate_direction_colors(atlas_streamlines)
-
-            # Get centroid using utility function (recalculate after any transformations)
-            centroid = calculate_centroid(atlas_streamlines)
-
-            # Generate each requested view
-            for view_name in views_to_generate:
-                output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
-
-                # Skip if file already exists (already added to generated_views above)
-                if output_image.exists() and not overwrite:
-                    continue
-
-                # Create scene using helper method
-                scene, _ = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
-
-                # Create actor with original streamlines using helper method
-                try:
-                    tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
-                    scene.add(tract_actor)
-                except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors
-                    error_msg = str(e).lower()
-                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        total_points = sum(len(sl) for sl in atlas_streamlines)
-                        logger.exception(
-                            "VTK memory allocation failed for atlas comparison view %s (likely std::bad_alloc). "
-                            "Atlas has %d streamlines with %d total points. "
-                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
-                            view_name,
-                            len(atlas_streamlines),
-                            total_points,
-                        )
-                        # Clean up and skip this view
-                        scene.clear()
-                        del scene
-                        gc.collect()
+                    # Skip if file already exists (already added to generated_views above)
+                    if output_image.exists() and not overwrite:
                         continue
-                    raise
 
-                # Set camera position for anatomical view using utility function
-                bbox_size = calculate_bbox_size(atlas_streamlines)
+                    # Create scene using helper method
+                    scene, _ = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
 
-                # Use helper method to set camera
-                self._set_anatomical_camera(
-                    scene,
-                    centroid,
-                    view_name,
-                    bbox_size=bbox_size,
-                )
+                    # Create actor with original streamlines using helper method
+                    try:
+                        tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
+                        scene.add(tract_actor)
+                    except RuntimeError as e:
+                        # Catch std::bad_alloc and other VTK errors
+                        error_msg = str(e).lower()
+                        if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                            total_points = sum(len(sl) for sl in atlas_streamlines)
+                            logger.exception(
+                                "VTK memory allocation failed for atlas comparison view %s (likely std::bad_alloc). "
+                                "Atlas has %d streamlines with %d total points. "
+                                "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                                view_name,
+                                len(atlas_streamlines),
+                                total_points,
+                            )
+                            # Clean up and skip this view
+                            scene.clear()
+                            del scene
+                            gc.collect()
+                            continue
+                        raise
 
-                # Record the scene (this can also fail with std::bad_alloc)
-                try:
-                    window.record(
-                        scene=scene,
-                        out_path=str(output_image),
-                        size=figure_size,
+                    # Set camera position for anatomical view using utility function
+                    bbox_size = calculate_bbox_size(atlas_streamlines)
+
+                    # Use helper method to set camera
+                    self._set_anatomical_camera(
+                        scene,
+                        centroid,
+                        view_name,
+                        bbox_size=bbox_size,
+                        template_space=template_space,
                     )
-                    generated_views[view_name] = output_image
-                except RuntimeError as e:
-                    # Catch std::bad_alloc and other VTK errors during rendering
-                    error_msg = str(e).lower()
-                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
-                        logger.exception(
-                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
-                            "Tract has %d streamlines with %d total points. "
-                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
-                            view_name,
-                            len(atlas_streamlines),
-                            sum(len(sl) for sl in atlas_streamlines),
+
+                    # Record the scene (this can also fail with std::bad_alloc)
+                    try:
+                        window.record(
+                            scene=scene,
+                            out_path=str(output_image),
+                            size=figure_size,
                         )
-                        # Clean up and skip this view
-                        scene.clear()
-                        del tract_actor
-                        del scene
-                        gc.collect()
-                        continue
-                    raise
+                        generated_views[view_name] = output_image
+                    except RuntimeError as e:
+                        # Catch std::bad_alloc and other VTK errors during rendering
+                        error_msg = str(e).lower()
+                        if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                            logger.exception(
+                                "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                                "Tract has %d streamlines with %d total points. "
+                                "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                                view_name,
+                                len(atlas_streamlines),
+                                sum(len(sl) for sl in atlas_streamlines),
+                            )
+                            # Clean up and skip this view
+                            scene.clear()
+                            del tract_actor
+                            del scene
+                            gc.collect()
+                            continue
+                        raise
 
-                # Explicitly clean up scene and actors to free memory
-                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
-                scene.clear()
-                del tract_actor
-                del scene
+                    # Explicitly clean up scene and actors to free memory
+                    # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+                    scene.clear()
+                    del tract_actor
+                    del scene
 
-                # Force garbage collection between views to free memory
-                # This is critical for large tractograms to prevent OOM kills
+                    # Force garbage collection between views to free memory
+                    # This is critical for large tractograms to prevent OOM kills
+                    gc.collect()
+
+                # Clean up large objects after all views are generated
+                del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
                 gc.collect()
-
-            # Clean up large objects after all views are generated
-            del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
-            gc.collect()
 
         except TractographyVisualizationError:
             raise
@@ -2395,7 +2528,6 @@ class TractographyVisualizer:
         atlas_file: str | Path,
         *,
         atlas_ref_img: str | Path | None = None,
-        flip_lr: bool = False,
         clust_thr: tuple[float, float, float] = (5, 3, 1.5),
         threshold: float = 6,
         rng: np.random.Generator | None = None,
@@ -2416,10 +2548,6 @@ class TractographyVisualizer:
             (e.g., MNI template if atlas is in MNI space). If None, assumes atlas
             is in the same space as the subject tract. This is important if the
             atlas is in a different space (e.g., MNI) than the subject.
-        flip_lr : bool, optional
-            Whether to flip left-right (X-axis) when transforming atlas.
-            This may be needed for some coordinate conventions or file formats
-            where the left-right orientation differs. Default is False.
         clust_thr : tuple[float, float, float], optional
             Clustering thresholds for QuickBundlesX used internally.
             Default is (5, 3, 1.5).
@@ -2476,19 +2604,9 @@ class TractographyVisualizer:
                     atlas_tract.streamlines,
                     np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
                 )
-
-                # Apply left-right flip if needed
-                if flip_lr:
-                    atlas_streamlines = Streamlines(
-                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
-                    )
             else:
                 # No transformation needed, use streamlines directly
                 atlas_streamlines = atlas_tract.streamlines
-                if flip_lr:
-                    atlas_streamlines = Streamlines(
-                        [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
-                    )
 
             # Use subject tract streamlines directly (already in RASMM)
             subject_streamlines = tract.streamlines
@@ -2520,7 +2638,6 @@ class TractographyVisualizer:
         atlas_file: str | Path,
         *,
         atlas_ref_img: str | Path | None = None,
-        flip_lr: bool = False,
         views: list[str] | None = None,
         output_dir: str | Path | None = None,
         figure_size: tuple[int, int] = (800, 800),
@@ -2543,9 +2660,6 @@ class TractographyVisualizer:
         atlas_ref_img : str | Path | None, optional
             Path to the reference image that matches the atlas coordinate space
             (e.g., MNI template if atlas is in MNI space).
-        flip_lr : bool, optional
-            Whether to flip left-right (X-axis) when transforming atlas.
-            Default is False.
         views : list[str] | None, optional
             List of views to generate. Options: "coronal", "axial", "sagittal".
             If None, generates all three views. Default is None.
@@ -2658,10 +2772,6 @@ class TractographyVisualizer:
                 atlas_tract.streamlines,
                 np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
             )
-            if flip_lr:
-                atlas_streamlines = Streamlines(
-                    [np.column_stack([-sl[:, 0], sl[:, 1], sl[:, 2]]) for sl in atlas_streamlines],
-                )
 
             # Downsample points (to avoid VTK segfaults)
             subject_streamlines = self._downsample_streamlines(subject_streamlines)
@@ -3948,7 +4058,6 @@ class TractographyVisualizer:
         metric_files: dict[str, dict[str, str | Path]] | None,
         atlas_ref_img: str | Path | None,
         *,
-        flip_lr: bool,
         skip_checks: list[str],
         subject_kwargs: dict[str, Any] | None = None,
         atlas_kwargs: dict[str, Any] | None = None,
@@ -4145,7 +4254,6 @@ class TractographyVisualizer:
                     ):
                         tract_file_mni = subjects_mni_space[subject_id][tract_name]
                         # Generate subject views in MNI space
-                        # Note: Don't apply flip_lr here - MNI views should match original anatomical views
                         subject_mni_views = self.generate_anatomical_views(
                             tract_file_mni,
                             ref_img=atlas_ref_img,  # Use atlas ref image for MNI space
@@ -4157,11 +4265,9 @@ class TractographyVisualizer:
                             tract_results[f"subject_mni_{view_name}"] = view_path
 
                     # Generate atlas views
-                    # Note: Don't apply flip_lr here - atlas views should match MNI views
                     atlas_views = self.generate_atlas_views(
                         atlas_file,
                         atlas_ref_img=atlas_ref_img,
-                        flip_lr=False,  # Set to False to match MNI views
                         output_dir=tract_output_dir,
                         **atlas_merged_kwargs,  # Atlas files use atlas_kwargs
                     )
@@ -4205,7 +4311,6 @@ class TractographyVisualizer:
                             tract_file_mni,
                             atlas_file,
                             atlas_ref_img=atlas_ref_img,
-                            flip_lr=flip_lr,
                             **kwargs,
                         )
                         tract_results["shape_similarity_score"] = str(similarity_score)
@@ -4216,7 +4321,6 @@ class TractographyVisualizer:
                             tract_file_mni,
                             atlas_file,
                             atlas_ref_img=atlas_ref_img,
-                            flip_lr=flip_lr,
                             output_dir=tract_output_dir,
                             **subject_merged_kwargs,
                         )
@@ -4394,7 +4498,6 @@ class TractographyVisualizer:
         atlas_files: dict[str, str | Path] | None = None,
         metric_files: dict[str, dict[str, str | Path]] | None = None,
         atlas_ref_img: str | Path | None = None,
-        flip_lr: bool = False,
         output_dir: str | Path | None = None,
         html_output: str | Path | None = None,
         skip_checks: list[str] | None = None,
@@ -4479,9 +4582,6 @@ class TractographyVisualizer:
             Path to the reference image matching the atlas coordinate space
             (e.g., MNI template). Required if atlas files are in a different
             coordinate space than subject tracts.
-        flip_lr : bool, optional
-            Whether to flip left-right (X-axis) when transforming atlas.
-            Default is False.
         output_dir : str | Path | None, optional
             Output directory for generated files. If None, uses the output
             directory set during initialization.
@@ -4716,7 +4816,6 @@ class TractographyVisualizer:
                             atlas_files=atlas_files,
                             metric_files=metric_files,
                             atlas_ref_img=atlas_ref_img,
-                            flip_lr=flip_lr,
                             skip_checks=skip_checks,
                             visualizer_params=visualizer_params,
                             subject_kwargs=subject_kwargs,
@@ -4912,7 +5011,6 @@ class TractographyVisualizer:
                                 atlas_files=atlas_files,
                                 metric_files=metric_files,
                                 atlas_ref_img=atlas_ref_img,
-                                flip_lr=flip_lr,
                                 skip_checks=skip_checks,
                                 subject_kwargs=subject_kwargs,
                                 atlas_kwargs=atlas_kwargs,
@@ -4961,7 +5059,6 @@ class TractographyVisualizer:
                         atlas_files=atlas_files,
                         metric_files=metric_files,
                         atlas_ref_img=atlas_ref_img,
-                        flip_lr=flip_lr,
                         skip_checks=skip_checks,
                         subject_kwargs=subject_kwargs,
                         atlas_kwargs=atlas_kwargs,

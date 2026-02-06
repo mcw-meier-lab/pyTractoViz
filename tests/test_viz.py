@@ -21,6 +21,7 @@ from pytractoviz.viz import (
     InvalidInputError,
     TractographyVisualizationError,
     TractographyVisualizer,
+    _is_nifti_atlas,
 )
 
 
@@ -831,6 +832,30 @@ class TestGenerateAnatomicalViews:
             visualizer.generate_anatomical_views(mock_tract_file, ref_img=mock_t1w_file)
 
 
+class TestIsNiftiAtlas:
+    """Test _is_nifti_atlas helper."""
+
+    def test_nii_returns_true(self) -> None:
+        """Test .nii path returns True."""
+        assert _is_nifti_atlas("atlas.nii") is True
+        assert _is_nifti_atlas(Path("roi.nii")) is True
+
+    def test_nii_gz_returns_true(self) -> None:
+        """Test .nii.gz path returns True."""
+        assert _is_nifti_atlas("atlas.nii.gz") is True
+        assert _is_nifti_atlas(Path("roi.nii.gz")) is True
+
+    def test_trk_returns_false(self) -> None:
+        """Test .trk path returns False."""
+        assert _is_nifti_atlas("atlas.trk") is False
+        assert _is_nifti_atlas(Path("tract.trk")) is False
+
+    def test_other_returns_false(self) -> None:
+        """Test other extensions return False."""
+        assert _is_nifti_atlas("image.nii.gz.bak") is False
+        assert _is_nifti_atlas("data.gii") is False
+
+
 class TestGenerateAtlasViews:
     """Test generate_atlas_views method."""
 
@@ -872,7 +897,7 @@ class TestGenerateAtlasViews:
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.load_trk")
-    def test_generate_atlas_views_with_flip(
+    def test_generate_atlas_views_with_ref_img(
         self,
         mock_load_trk: Mock,
         mock_nib_load: Mock,
@@ -885,7 +910,7 @@ class TestGenerateAtlasViews:
         mock_stateful_tractogram: Mock,
         mock_nibabel_image: Mock,
     ) -> None:
-        """Test generating atlas views with left-right flip."""
+        """Test generating atlas views with reference image."""
         mock_tract = Mock()
         mock_tract.streamlines = mock_stateful_tractogram.streamlines
         mock_load_trk.return_value = mock_tract
@@ -896,7 +921,6 @@ class TestGenerateAtlasViews:
             mock_tract_file,
             ref_img=mock_t1w_file,
             output_dir=tmp_dir,
-            flip_lr=True,
         )
         assert isinstance(views, dict)
         assert len(views) == 3
@@ -963,6 +987,85 @@ class TestGenerateAtlasViews:
         assert isinstance(views, dict)
         # Check that output files use custom name
         assert all("custom_atlas_atlas" in str(path) for path in views.values())
+
+    @patch("pytractoviz.viz.window.record")
+    @patch("pytractoviz.viz.actor.contour_from_roi")
+    @patch("pytractoviz.viz._prepare_atlas_roi_for_views")
+    @patch("pytractoviz.viz.nib.load")
+    def test_generate_atlas_views_nifti_atlas(
+        self,
+        mock_nib_load: Mock,
+        mock_prepare_roi: Mock,
+        mock_contour_from_roi: Mock,
+        _mock_record: Mock,
+        visualizer: TractographyVisualizer,
+        mock_t1w_file: Path,
+        tmp_dir: Path,
+        mock_nibabel_image: Mock,
+    ) -> None:
+        """Test generating atlas views with NIfTI ROI atlas (contour_from_roi + template_space)."""
+        atlas_nii = tmp_dir / "atlas_roi.nii.gz"
+        atlas_nii.touch()
+        # ROI data in ref space (small binary block for centroid/bbox)
+        roi_data = np.zeros((6, 6, 6), dtype=np.float32)
+        roi_data[2:4, 2:4, 2:4] = 1
+        mock_prepare_roi.return_value = roi_data
+        # Ref image for centroid/bbox: need .affine
+        mock_ref_img = Mock()
+        mock_ref_img.affine = np.eye(4)
+        mock_nib_load.return_value = mock_ref_img
+        mock_contour_from_roi.return_value = Mock()
+
+        views = visualizer.generate_atlas_views(
+            atlas_nii,
+            ref_img=mock_t1w_file,
+            output_dir=tmp_dir,
+        )
+        assert isinstance(views, dict)
+        assert "coronal" in views
+        assert "axial" in views
+        assert "sagittal" in views
+        mock_prepare_roi.assert_called_once()
+        mock_contour_from_roi.assert_called()
+
+    @patch("pytractoviz.viz.TractographyVisualizer._set_anatomical_camera")
+    @patch("pytractoviz.viz.window.record")
+    @patch("pytractoviz.viz.actor.contour_from_roi")
+    @patch("pytractoviz.viz._prepare_atlas_roi_for_views")
+    @patch("pytractoviz.viz.nib.load")
+    def test_generate_atlas_views_nifti_with_template_space(
+        self,
+        mock_nib_load: Mock,
+        mock_prepare_roi: Mock,
+        mock_contour_from_roi: Mock,
+        _mock_record: Mock,
+        mock_set_camera: Mock,
+        visualizer: TractographyVisualizer,
+        mock_t1w_file: Path,
+        tmp_dir: Path,
+    ) -> None:
+        """Test that template_space is passed to _set_anatomical_camera for NIfTI atlas."""
+        atlas_nii = tmp_dir / "atlas_roi.nii.gz"
+        atlas_nii.touch()
+        roi_data = np.zeros((6, 6, 6), dtype=np.float32)
+        roi_data[2:4, 2:4, 2:4] = 1
+        mock_prepare_roi.return_value = roi_data
+        mock_ref_img = Mock()
+        mock_ref_img.affine = np.eye(4)
+        mock_nib_load.return_value = mock_ref_img
+        mock_contour_from_roi.return_value = Mock()
+
+        visualizer.generate_atlas_views(
+            atlas_nii,
+            ref_img=mock_t1w_file,
+            output_dir=tmp_dir,
+            template_space="mni",
+        )
+        # _set_anatomical_camera should have been called with template_space="mni"
+        calls = mock_set_camera.call_args_list
+        assert len(calls) >= 1
+        for call in calls:
+            assert call.kwargs.get("template_space") == "mni"
 
 
 class TestPlotAFQ:
@@ -1357,7 +1460,7 @@ class TestCalculateShapeSimilarity:
     @patch("pytractoviz.viz.transform_streamlines")
     @patch("pytractoviz.viz.nib.load")
     @patch("pytractoviz.viz.load_trk")
-    def test_calculate_shape_similarity_with_flip_lr(
+    def test_calculate_shape_similarity_two_tracts_no_atlas_ref(
         self,
         mock_load_trk: Mock,
         mock_nib_load: Mock,
@@ -1368,7 +1471,7 @@ class TestCalculateShapeSimilarity:
         mock_stateful_tractogram: Mock,
         mock_nibabel_image: Mock,
     ) -> None:
-        """Test calculate_shape_similarity with left-right flip."""
+        """Test calculate_shape_similarity with two tract files and no atlas_ref_img."""
         mock_tract = Mock()
         mock_tract.streamlines = mock_stateful_tractogram.streamlines
         mock_atlas_tract = Mock()
@@ -1380,7 +1483,6 @@ class TestCalculateShapeSimilarity:
         similarity = visualizer.calculate_shape_similarity(
             mock_tract_file,
             mock_tract_file,
-            flip_lr=True,
         )
         assert isinstance(similarity, float)
         # Should not call transform when no atlas_ref_img

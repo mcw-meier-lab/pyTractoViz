@@ -96,11 +96,6 @@ def get_parser() -> argparse.ArgumentParser:
         help="Resample all streamlines to reduce point count",
     )
     qc_parser.add_argument(
-        "--flip-lr",
-        action="store_true",
-        help="Flip left-right (X-axis) - useful for MNI space tracts",
-    )
-    qc_parser.add_argument(
         "--window-size",
         type=int,
         nargs=2,
@@ -213,7 +208,6 @@ def main(args: list[str] | None = None) -> int:
                     subsample_factor=opts.subsample_factor,
                     max_points_per_streamline=opts.max_points_per_streamline,
                     resample_streamlines=opts.resample_streamlines,
-                    flip_lr=opts.flip_lr,
                     window_size=tuple(opts.window_size),
                 )
                 print(f"  ✓ Completed review of {tract_file.name}")
