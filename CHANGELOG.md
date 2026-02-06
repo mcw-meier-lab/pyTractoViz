@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.5.0](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.5.0) - 2026-02-06
+
+<small>[Compare with 0.4.4](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.4.4...0.5.0)</small>
+
+### Features
+
+- add nii atlas support ([e01e497](https://github.com/mcw-meier-lab/pyTractoViz/commit/e01e49730f04d22ee6bc0541d9a9ac3c833a12eb) by Lezlie Espana).
+
 ## [0.4.4](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.4.4) - 2026-01-30
 
 <small>[Compare with 0.4.3](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.4.3...0.4.4)</small>
