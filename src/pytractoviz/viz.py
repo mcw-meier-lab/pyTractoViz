@@ -625,6 +625,19 @@ def _process_tract_worker(
             )
             return (subject_id, tract_name, {})
 
+        # Set subject reference image so any code path using self._reference_image works
+        # (e.g. calc_cci when ref_img is not passed or is overridden by kwargs)
+        try:
+            visualizer.set_reference_image(subject_ref_img)
+        except (OSError, ValueError) as e:
+            logger.exception(
+                "Failed to set reference image in worker for %s/%s: %s",
+                subject_id,
+                tract_name,
+                type(e).__name__,
+            )
+            return (subject_id, tract_name, {})
+
         # Process the tract with additional error handling
         try:
             results = visualizer._process_single_tract(
@@ -3076,7 +3089,18 @@ class TractographyVisualizer:
             if cci is not None and keep_cci is not None and keep_tract is not None and long_streamlines is not None:
                 pass  # use provided arrays/tracts
             else:
-                cci, keep_cci, keep_tract, long_streamlines = self.calc_cci(tract_file, ref_img=ref_img)
+                # Ensure ref_img is set so calc_cci never sees None (e.g. if kwargs overrode it earlier)
+                if ref_img is None:
+                    ref_img = self._reference_image
+                if ref_img is None:
+                    raise InvalidInputError(
+                        "No reference image provided. Set it via constructor or "
+                        "set_reference_image() method, or pass it as an argument.",
+                    )
+                cci, keep_cci, keep_tract, long_streamlines = self.calc_cci(
+                    tract_file,
+                    ref_img=ref_img,
+                )
 
             if len(cci) == 0:
                 logger.warning("No CCI values; skipping CCI visualization.")
