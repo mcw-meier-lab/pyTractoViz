@@ -74,13 +74,8 @@ _ROI_BINARY_THRESHOLD = 0.5
 def _is_nifti_atlas(path: str | Path) -> bool:
     """Return True if path has a NIfTI atlas extension (.nii or .nii.gz)."""
     p = Path(path)
-    return (
-        p.suffix == ".nii"
-        or (
-            p.suffix == ".gz"
-            and len(p.suffixes) >= _MIN_SUFFIXES_FOR_NII_GZ
-            and p.suffixes[-2] == ".nii"
-        )
+    return p.suffix == ".nii" or (
+        p.suffix == ".gz" and len(p.suffixes) >= _MIN_SUFFIXES_FOR_NII_GZ and p.suffixes[-2] == ".nii"
     )
 
 
@@ -4096,11 +4091,13 @@ class TractographyVisualizer:
             # 1. Standard anatomical views
             if "anatomical_views" not in skip_checks:
                 try:
+                    # Ensure ref_img from kwargs cannot override subject_ref_img (e.g. from config)
+                    anat_kwargs = {k: v for k, v in subject_merged_kwargs.items() if k != "ref_img"}
                     anatomical_views = self.generate_anatomical_views(
                         tract_file,
                         output_dir=tract_output_dir,
                         ref_img=subject_ref_img,
-                        **subject_merged_kwargs,
+                        **anat_kwargs,
                     )
                     # Add anatomical views to results
                     for view_name, view_path in anatomical_views.items():
@@ -4179,6 +4176,8 @@ class TractographyVisualizer:
 
                     # Histogram + before/after CCI views (reuse precomputed CCI/tracts)
                     if cci_values is not None and keep_tract is not None and len(cci_values) > 0:
+                        # Ensure ref_img from kwargs cannot override subject_ref_img (e.g. from config)
+                        cci_kwargs = {k: v for k, v in subject_merged_kwargs.items() if k != "ref_img"}
                         cci_result = self.compare_before_after_cci(
                             tract_file,
                             ref_img=subject_ref_img,
@@ -4187,7 +4186,7 @@ class TractographyVisualizer:
                             keep_cci=keep_cci,
                             keep_tract=keep_tract,
                             long_streamlines=long_streamlines,
-                            **subject_merged_kwargs,
+                            **cci_kwargs,
                         )
                         hist_path = cci_result["histogram"]
                         if isinstance(hist_path, Path):
