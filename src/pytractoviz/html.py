@@ -16,23 +16,25 @@ def create_quality_check_html(
     title: str = "Tractography Quality Check",
     items_per_page: int = 50,
 ) -> None:
-    """Create an interactive HTML quality check report.
+    """Create an interactive HTML quality check report for a single subject.
 
-    This function generates an HTML file with filtering, search, and pagination
-    capabilities for efficiently reviewing large datasets of visualizations.
+    This function generates an HTML file for one subject with search and
+    pagination. Only the first subject in the data is used. Images in the
+    detail view are shown in a fixed order: main tract (sagittal, axial,
+    coronal), atlas tract (sagittal, axial, coronal), CCI plots, AFQ plots,
+    then the rest.
 
     Parameters
     ----------
     data : dict
         Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
-        Example:
+        Only the first subject is used. Example:
         {
             "sub-001": {
                 "AF_L": {
-                    "image": "path/to/image.png",
-                    "plot": "path/to/plot.png",
-                    "gif": "path/to/animation.gif",
-                    "video": "path/to/video.mp4"
+                    "anatomical_sagittal": "path/to/image.png",
+                    "atlas_sagittal": "path/to/atlas.png",
+                    ...
                 }
             }
         }
@@ -45,18 +47,9 @@ def create_quality_check_html(
 
     Notes
     -----
-    Supported media types in the data dictionary:
-    - "image": Static images (PNG, JPG, etc.)
-    - "plot": Matplotlib plots or other static plots
-    - "gif": Animated GIF files
-    - "video": Video files (MP4, WebM, etc.)
-
-    The HTML report includes:
-    - Filtering by subject and tract
-    - Search functionality
-    - Pagination for efficient loading
-    - Thumbnail grid view with expandable detail views
-    - Support for images, plots, GIFs, and videos
+    The report uses a single subject (first in the data), no tract dropdown,
+    and a fixed image order in the modal: main tract sagittal/axial/coronal,
+    atlas tract sagittal/axial/coronal, CCI plots, AFQ plots, then others.
     """
     # Convert file paths to relative paths for HTML
     html_dir = Path(output_file).parent
@@ -102,12 +95,17 @@ def create_quality_check_html(
                     },
                 )
 
-    # Extract unique subjects and tracts for filters
-    subjects = sorted(data_processed.keys())
-    tract_names: list[str] = sorted({tract for tracts_dict in data_processed.values() for tract in tracts_dict})
-
-    # Check if this is a single-subject report
-    is_single_subject = len(subjects) == 1
+    # Single-subject report: keep only the first subject
+    all_subjects = sorted(data_processed.keys())
+    if not all_subjects:
+        raise ValueError("No subject data provided for HTML report.")
+    first_subject = all_subjects[0]
+    data_processed = {first_subject: data_processed[first_subject]}
+    missing_data_info = {
+        first_subject: missing_data_info.get(first_subject, []),
+    }
+    subjects = [first_subject]
+    tract_names = sorted(data_processed[first_subject].keys())
 
     # Generate HTML
     html_content = f"""<!DOCTYPE html>
@@ -602,11 +600,7 @@ def create_quality_check_html(
     <div class="header">
         <h1>{title}</h1>
         <div class="stats">
-            <span id="total-items">{
-        f"{len(tract_names)} tract" + ("s" if len(tract_names) != 1 else "")
-        if is_single_subject
-        else f"{len(subjects)} subjects x {len(tract_names)} tracts"
-    }</span> |
+            <span id="total-items">{len(tract_names)} tract{"s" if len(tract_names) != 1 else ""}</span> |
             <span id="filtered-count">Showing all items</span>
         </div>
     </div>
@@ -629,29 +623,9 @@ def create_quality_check_html(
 
     <div class="controls">
         <div class="controls-grid">
-            {
-        "<!-- Subject filter hidden for single-subject report -->"
-        if is_single_subject
-        else f'''<div class="control-group">
-                <label for="subject-filter">Filter by Subject</label>
-                <select id="subject-filter">
-                    <option value="">All Subjects</option>
-                    {"".join(f'<option value="{s}">{s}</option>' for s in subjects)}
-                </select>
-            </div>'''
-    }
-            <div class="control-group">
-                <label for="tract-filter">Filter by Tract</label>
-                <select id="tract-filter">
-                    <option value="">All Tracts</option>
-                    {"".join(f'<option value="{t}">{t}</option>' for t in tract_names)}
-                </select>
-            </div>
             <div class="control-group">
                 <label for="search">Search</label>
-                <input type="text" id="search" placeholder="{
-        "Search tract..." if is_single_subject else "Search subject or tract..."
-    }">
+                <input type="text" id="search" placeholder="Search tract...">
             </div>
         </div>
         <div class="pagination">
@@ -707,6 +681,19 @@ def create_quality_check_html(
             return ['before_after_cci', 'atlas_comparison', 'shape_similarity_image'].includes(mediaType);
         }}
 
+        // Fixed display order: main sagittal, atlas sagittal, main axial, atlas axial, main coronal, atlas coronal, CCI, AFQ, rest
+        const MEDIA_DISPLAY_ORDER = [
+            'anatomical_sagittal', 'atlas_sagittal', 'anatomical_axial', 'atlas_axial', 'anatomical_coronal', 'atlas_coronal',
+            'cci_histogram', 'before_cci_sagittal', 'after_cci_sagittal', 'before_cci_axial', 'after_cci_axial', 'before_cci_coronal', 'after_cci_coronal',
+            'atlas_comparison', 'shape_similarity_image'
+        ];
+        function getMediaSortKey(type) {{
+            const idx = MEDIA_DISPLAY_ORDER.indexOf(type);
+            if (idx >= 0) return idx;
+            if (type.startsWith('afq_')) return 100;
+            return 200;
+        }}
+
         function flattenData() {{
             const items = [];
             for (const [subject, tracts] of Object.entries(data)) {{
@@ -718,18 +705,9 @@ def create_quality_check_html(
         }}
 
         function filterData() {{
-            const subjectFilterEl = document.getElementById('subject-filter');
-            const subjectFilter = subjectFilterEl ? subjectFilterEl.value : '';
-            const tractFilter = document.getElementById('tract-filter').value;
             const searchTerm = document.getElementById('search').value.toLowerCase();
-
             filteredData = flattenData().filter(item => {{
-                const matchSubject = !subjectFilter || item.subject === subjectFilter;
-                const matchTract = !tractFilter || item.tract === tractFilter;
-                const matchSearch = !searchTerm ||
-                    item.tract.toLowerCase().includes(searchTerm) ||
-                    (subjectFilterEl && item.subject.toLowerCase().includes(searchTerm));
-                return matchSubject && matchTract && matchSearch;
+                return !searchTerm || item.tract.toLowerCase().includes(searchTerm);
             }});
 
             currentPage = 1;
@@ -796,7 +774,6 @@ def create_quality_check_html(
                 return `
                     <div class="item-card" onclick="openModal('${{item.subject}}', '${{item.tract}}')">
                         <div class="item-header">
-                            <h3>${{item.subject}}</h3>
                             <div class="tract-name">${{item.tract}}</div>
                         </div>
                         <div class="item-media">
@@ -822,13 +799,12 @@ def create_quality_check_html(
             const item = filteredData.find(i => i.subject === subject && i.tract === tract);
             if (!item) return;
 
-            document.getElementById('modal-title').textContent = `${{subject}} - ${{tract}}`;
+            document.getElementById('modal-title').textContent = tract;
             const modalMedia = document.getElementById('modal-media');
 
-            // Separate scores and media files
+            // Separate scores and media; merge media + comparisons and sort by fixed display order
             const scores = [];
-            const mediaFiles = [];
-            const comparisons = [];
+            const mediaItems = [];
 
             Object.entries(item.media).forEach(([type, path]) => {{
                 if (!path) return;
@@ -836,16 +812,88 @@ def create_quality_check_html(
 
                 if (mediaType === 'score') {{
                     scores.push({{ type, value: parseFloat(path) }});
-                }} else if (isComparisonType(type)) {{
-                    comparisons.push({{ type, path }});
                 }} else {{
-                    mediaFiles.push({{ type, path }});
+                    mediaItems.push({{ type, path, isComparison: isComparisonType(type) }});
                 }}
             }});
 
+            mediaItems.sort((a, b) => {{
+                const ka = getMediaSortKey(a.type);
+                const kb = getMediaSortKey(b.type);
+                if (ka !== kb) return ka - kb;
+                return (a.type || '').localeCompare(b.type || '');
+            }});
+
+            function renderMediaItem(entry) {{
+                const mediaType = getMediaType(entry.path);
+                let mediaHtml = '';
+                if (mediaType === 'video') {{
+                    mediaHtml = `<video src="${{entry.path}}" controls autoplay></video>`;
+                }} else if (mediaType === 'gif' || mediaType === 'image') {{
+                    mediaHtml = `<img src="${{entry.path}}" alt="${{entry.type}}">`;
+                }}
+                const label = entry.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+
+                if (entry.type === 'before_after_cci') {{
+                    return `
+                        <div class="modal-media-item">
+                            <h4>${{label}}</h4>
+                            ${{mediaHtml}}
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; text-align: center;">
+                                <div style="font-size: 0.85rem; color: #555; font-weight: 600;">Before CCI</div>
+                                <div style="font-size: 0.85rem; color: #555; font-weight: 600;">After CCI</div>
+                            </div>
+                        </div>
+                    `;
+                }}
+                if (entry.type === 'atlas_comparison') {{
+                    const subjectImg = item.media.subject_image || item.media.atlas_comparison_subject;
+                    const atlasImg = item.media.atlas_image || item.media.atlas_comparison_atlas;
+                    if (subjectImg && atlasImg) {{
+                        const st = getMediaType(subjectImg);
+                        const at = getMediaType(atlasImg);
+                        const subjectHtml = (st === 'image' || st === 'gif') ? `<img src="${{subjectImg}}" alt="Subject">` : `<img src="${{entry.path}}" alt="Subject">`;
+                        const atlasHtml = (at === 'image' || at === 'gif') ? `<img src="${{atlasImg}}" alt="Atlas">` : `<img src="${{entry.path}}" alt="Atlas">`;
+                        return `
+                            <div class="modal-media-item">
+                                <h4>${{label}}</h4>
+                                <div class="comparison-container">
+                                    <div class="comparison-item"><h5>Subject</h5>${{subjectHtml}}</div>
+                                    <div class="comparison-item"><h5>Atlas</h5>${{atlasHtml}}</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                }}
+                if (entry.type === 'shape_similarity_image') {{
+                    const subjectImg = item.media.shape_similarity_subject;
+                    const atlasImg = item.media.shape_similarity_atlas;
+                    if (subjectImg && atlasImg) {{
+                        const st = getMediaType(subjectImg);
+                        const at = getMediaType(atlasImg);
+                        const subjectHtml = (st === 'image' || st === 'gif') ? `<img src="${{subjectImg}}" alt="Subject">` : `<img src="${{entry.path}}" alt="Subject">`;
+                        const atlasHtml = (at === 'image' || at === 'gif') ? `<img src="${{atlasImg}}" alt="Atlas">` : `<img src="${{entry.path}}" alt="Atlas">`;
+                        return `
+                            <div class="modal-media-item">
+                                <h4>${{label}}</h4>
+                                <div class="comparison-container">
+                                    <div class="comparison-item"><h5>Subject</h5>${{subjectHtml}}</div>
+                                    <div class="comparison-item"><h5>Atlas</h5>${{atlasHtml}}</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                }}
+                return `
+                    <div class="modal-media-item">
+                        <h4>${{label}}</h4>
+                        ${{mediaHtml}}
+                    </div>
+                `;
+            }}
+
             let html = '';
 
-            // Display scores as badges
             if (scores.length > 0) {{
                 html += scores.map(score => `
                     <div class="modal-media-item">
@@ -855,137 +903,7 @@ def create_quality_check_html(
                 `).join('');
             }}
 
-            // Display comparisons side-by-side
-            if (comparisons.length > 0) {{
-                html += comparisons.map(comp => {{
-                    const mediaType = getMediaType(comp.path);
-                    let mediaHtml = '';
-
-                    if (mediaType === 'video') {{
-                        mediaHtml = `<video src="${{comp.path}}" controls autoplay></video>`;
-                    }} else if (mediaType === 'gif' || mediaType === 'image') {{
-                        mediaHtml = `<img src="${{comp.path}}" alt="${{comp.type}}">`;
-                    }}
-
-                    // For before_after_cci, the image is already side-by-side, just add labels
-                    if (comp.type === 'before_after_cci') {{
-                        return `
-                            <div class="modal-media-item">
-                                <h4>${{comp.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                                ${{mediaHtml}}
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; text-align: center;">
-                                    <div style="font-size: 0.85rem; color: #555; font-weight: 600;">Before CCI</div>
-                                    <div style="font-size: 0.85rem; color: #555; font-weight: 600;">After CCI</div>
-                                </div>
-                            </div>
-                        `;
-                    }} else if (comp.type === 'atlas_comparison') {{
-                        // Check if we have separate subject and atlas images
-                        const subjectImg = item.media.subject_image || item.media.atlas_comparison_subject;
-                        const atlasImg = item.media.atlas_image || item.media.atlas_comparison_atlas;
-
-                        if (subjectImg && atlasImg) {{
-                            const subjectType = getMediaType(subjectImg);
-                            const atlasType = getMediaType(atlasImg);
-                            let subjectHtml = subjectType === 'image' || subjectType === 'gif'
-                                ? `<img src="${{subjectImg}}" alt="Subject">`
-                                : `<img src="${{comp.path}}" alt="Subject">`;
-                            let atlasHtml = atlasType === 'image' || atlasType === 'gif'
-                                ? `<img src="${{atlasImg}}" alt="Atlas">`
-                                : `<img src="${{comp.path}}" alt="Atlas">`;
-
-                            return `
-                                <div class="modal-media-item">
-                                    <h4>${{comp.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                                    <div class="comparison-container">
-                                        <div class="comparison-item">
-                                            <h5>Subject</h5>
-                                            ${{subjectHtml}}
-                                        </div>
-                                        <div class="comparison-item">
-                                            <h5>Atlas</h5>
-                                            ${{atlasHtml}}
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }} else {{
-                            // Single comparison image
-                            return `
-                                <div class="modal-media-item">
-                                    <h4>${{comp.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                                    ${{mediaHtml}}
-                                </div>
-                            `;
-                        }}
-                    }} else if (comp.type === 'shape_similarity_image') {{
-                        // Check if we have separate subject and atlas images
-                        const subjectImg = item.media.shape_similarity_subject;
-                        const atlasImg = item.media.shape_similarity_atlas;
-
-                        if (subjectImg && atlasImg) {{
-                            const subjectType = getMediaType(subjectImg);
-                            const atlasType = getMediaType(atlasImg);
-                            let subjectHtml = subjectType === 'image' || subjectType === 'gif'
-                                ? `<img src="${{subjectImg}}" alt="Subject">`
-                                : `<img src="${{comp.path}}" alt="Subject">`;
-                            let atlasHtml = atlasType === 'image' || atlasType === 'gif'
-                                ? `<img src="${{atlasImg}}" alt="Atlas">`
-                                : `<img src="${{comp.path}}" alt="Atlas">`;
-
-                            return `
-                                <div class="modal-media-item">
-                                    <h4>${{comp.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                                    <div class="comparison-container">
-                                        <div class="comparison-item">
-                                            <h5>Subject</h5>
-                                            ${{subjectHtml}}
-                                        </div>
-                                        <div class="comparison-item">
-                                            <h5>Atlas</h5>
-                                            ${{atlasHtml}}
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }} else {{
-                            // Single overlay image
-                            return `
-                                <div class="modal-media-item">
-                                    <h4>${{comp.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                                    ${{mediaHtml}}
-                                </div>
-                            `;
-                        }}
-                    }} else {{
-                        return `
-                            <div class="modal-media-item">
-                                <h4>${{comp.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                                ${{mediaHtml}}
-                            </div>
-                        `;
-                    }}
-                }}).join('');
-            }}
-
-            // Display other media files
-            html += mediaFiles.map(media => {{
-                const mediaType = getMediaType(media.path);
-                let mediaHtml = '';
-
-                if (mediaType === 'video') {{
-                    mediaHtml = `<video src="${{media.path}}" controls autoplay></video>`;
-                }} else if (mediaType === 'gif' || mediaType === 'image') {{
-                    mediaHtml = `<img src="${{media.path}}" alt="${{media.type}}">`;
-                }}
-
-                return `
-                    <div class="modal-media-item">
-                        <h4>${{media.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
-                        ${{mediaHtml}}
-                    </div>
-                `;
-            }}).join('');
+            html += mediaItems.map(renderMediaItem).join('');
 
             modalMedia.innerHTML = html;
 
@@ -997,11 +915,6 @@ def create_quality_check_html(
         }}
 
         // Event listeners
-        const subjectFilterEl = document.getElementById('subject-filter');
-        if (subjectFilterEl) {{
-            subjectFilterEl.addEventListener('change', filterData);
-        }}
-        document.getElementById('tract-filter').addEventListener('change', filterData);
         document.getElementById('search').addEventListener('input', filterData);
         document.getElementById('prev-page').addEventListener('click', () => {{
             if (currentPage > 1) {{
