@@ -5608,7 +5608,7 @@ def subject_bundle_key(stem: str) -> str:
     """Extract the short bundle name from a PYAFQ or BIDS-like tract filename stem."""
     s = str(stem)
     if "desc-" not in s:
-        return s.split("_")[-1] if "_" in s else s
+        return s.rsplit("_", 1)[-1] if "_" in s else s
     after_desc = s.split("desc-", 1)[1]
     if "_tractography" in after_desc:
         after_desc = after_desc.split("_tractography")[0].rstrip("_")
@@ -7913,7 +7913,7 @@ def generate_anatomical_views(
 
             try:
                 window.record(
-                    scene=scene,  # noqa: F821
+                    scene=scene,  # noqa: F821, RUF100
                     out_path=str(output_image),
                     size=figure_size,
                 )
@@ -7932,20 +7932,20 @@ def generate_anatomical_views(
                         sum(len(sl) for sl in tract_streamlines),
                     )
                     # Clean up and skip this view
-                    scene.clear()  # noqa: F821
+                    scene.clear()  # noqa: F821, RUF100
                     if tract_actor is not None:
                         del tract_actor
-                    del scene  # noqa: F821
+                    del scene  # noqa: F821, RUF100
                     gc.collect()
                     continue
                 raise
 
             # Explicitly clean up scene and actors to free memory
             # VTK/FURY objects can hold circular references, so explicit cleanup is critical
-            scene.clear()  # noqa: F821
+            scene.clear()  # noqa: F821, RUF100
             if tract_actor is not None:
                 del tract_actor
-            del scene  # noqa: F821
+            del scene  # noqa: F821, RUF100
 
             # Force garbage collection between views to free memory
             # This is critical for large tractograms to prevent OOM kills

@@ -12272,7 +12272,7 @@ template_space : str
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract the short bundle name from a PYAFQ or BIDS-like tract filename stem.&quot;&quot;&quot;</span>
     <span class="n">s</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">stem</span><span class="p">)</span>
     <span class="k">if</span> <span class="s2">&quot;desc-&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">s</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;_&quot;</span> <span class="ow">in</span> <span class="n">s</span> <span class="k">else</span> <span class="n">s</span>
+        <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;_&quot;</span> <span class="ow">in</span> <span class="n">s</span> <span class="k">else</span> <span class="n">s</span>
     <span class="n">after_desc</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;desc-&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
     <span class="k">if</span> <span class="s2">&quot;_tractography&quot;</span> <span class="ow">in</span> <span class="n">after_desc</span><span class="p">:</span>
         <span class="n">after_desc</span> <span class="o">=</span> <span class="n">after_desc</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;_tractography&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span>
@@ -17014,7 +17014,7 @@ TractographyVisualizationError
 
             <span class="k">try</span><span class="p">:</span>
                 <span class="n">window</span><span class="o">.</span><span class="n">record</span><span class="p">(</span>
-                    <span class="n">scene</span><span class="o">=</span><span class="n">scene</span><span class="p">,</span>  <span class="c1"># noqa: F821</span>
+                    <span class="n">scene</span><span class="o">=</span><span class="n">scene</span><span class="p">,</span>  <span class="c1"># noqa: F821, RUF100</span>
                     <span class="n">out_path</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_image</span><span class="p">),</span>
                     <span class="n">size</span><span class="o">=</span><span class="n">figure_size</span><span class="p">,</span>
                 <span class="p">)</span>
@@ -17033,20 +17033,20 @@ TractographyVisualizationError
                         <span class="nb">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sl</span><span class="p">)</span> <span class="k">for</span> <span class="n">sl</span> <span class="ow">in</span> <span class="n">tract_streamlines</span><span class="p">),</span>
                     <span class="p">)</span>
                     <span class="c1"># Clean up and skip this view</span>
-                    <span class="n">scene</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>  <span class="c1"># noqa: F821</span>
+                    <span class="n">scene</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>  <span class="c1"># noqa: F821, RUF100</span>
                     <span class="k">if</span> <span class="n">tract_actor</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                         <span class="k">del</span> <span class="n">tract_actor</span>
-                    <span class="k">del</span> <span class="n">scene</span>  <span class="c1"># noqa: F821</span>
+                    <span class="k">del</span> <span class="n">scene</span>  <span class="c1"># noqa: F821, RUF100</span>
                     <span class="n">gc</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
                     <span class="k">continue</span>
                 <span class="k">raise</span>
 
             <span class="c1"># Explicitly clean up scene and actors to free memory</span>
             <span class="c1"># VTK/FURY objects can hold circular references, so explicit cleanup is critical</span>
-            <span class="n">scene</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>  <span class="c1"># noqa: F821</span>
+            <span class="n">scene</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>  <span class="c1"># noqa: F821, RUF100</span>
             <span class="k">if</span> <span class="n">tract_actor</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">del</span> <span class="n">tract_actor</span>
-            <span class="k">del</span> <span class="n">scene</span>  <span class="c1"># noqa: F821</span>
+            <span class="k">del</span> <span class="n">scene</span>  <span class="c1"># noqa: F821, RUF100</span>
 
             <span class="c1"># Force garbage collection between views to free memory</span>
             <span class="c1"># This is critical for large tractograms to prevent OOM kills</span>
