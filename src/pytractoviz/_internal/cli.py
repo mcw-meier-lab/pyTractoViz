@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from pytractoviz._internal import debug
+from pytractoviz._internal.report_cli import _REPORT_COMMANDS, _add_report_subparsers, _run_report_command
 from pytractoviz.viz import (
     InvalidInputError,
     TractographyVisualizationError,
@@ -47,55 +48,54 @@ def get_parser() -> argparse.ArgumentParser:
     # Add subcommands
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Interactive QC subcommand
-    qc_parser = subparsers.add_parser(
-        "qc-interactive",
-        help="Interactive quality check: view tracts one by one in 3D",
+    interactive_parser = subparsers.add_parser(
+        "interactive",
+        help="Interactive 3D viewer: review tracts one by one",
         description=(
             "Walk through tracts interactively for quality checking. "
             "Opens each tract in a 3D viewer that you can rotate and examine. "
             "Close the window to move to the next tract."
         ),
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "tracts",
         nargs="+",
         help="Tract files (.trk) or directories containing .trk files",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--ref",
         "--reference",
         dest="ref_img",
         required=True,
         help="Reference T1-weighted image (required)",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--no-glass-brain",
         dest="show_glass_brain",
         action="store_false",
         help="Disable glass brain outline",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--max-streamlines",
         type=int,
         help="Maximum number of streamlines to render (subsample if more)",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--subsample-factor",
         type=float,
         help="Fraction of streamlines to keep (0.0 to 1.0)",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--max-points-per-streamline",
         type=int,
         help="Maximum points per streamline (resample if more)",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--resample-streamlines",
         action="store_true",
         help="Resample all streamlines to reduce point count",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--window-size",
         type=int,
         nargs=2,
@@ -103,12 +103,14 @@ def get_parser() -> argparse.ArgumentParser:
         metavar=("WIDTH", "HEIGHT"),
         help="Window size in pixels (default: 800 800)",
     )
-    qc_parser.add_argument(
+    interactive_parser.add_argument(
         "--skip",
         type=int,
         default=0,
         help="Number of tracts to skip at the start (default: 0)",
     )
+
+    _add_report_subparsers(subparsers)
 
     return parser
 
@@ -167,7 +169,7 @@ def main(args: list[str] | None = None) -> int:
     parser = get_parser()
     opts = parser.parse_args(args=args)
 
-    if opts.command == "qc-interactive":
+    if opts.command == "interactive":
         # Collect all tract files
         tract_files = _collect_tract_files(opts.tracts)
 
@@ -222,6 +224,9 @@ def main(args: list[str] | None = None) -> int:
 
         print(f"\n✓ Completed review of all {len(tract_files)} tract(s).")
         return 0
+
+    if opts.command in _REPORT_COMMANDS:
+        return _run_report_command(opts)
 
     # Default behavior (no command specified)
     if opts.command is None:
