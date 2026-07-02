@@ -7,6 +7,14 @@ try:
 except ImportError:
     resource = None  # type: ignore[assignment]
 
+_xvfb: Any = None
+try:
+    from xvfbwrapper import Xvfb
+
+    _xvfb = Xvfb
+except ImportError:
+    pass
+
 
 def _get_resource_usage() -> Any | None:
     if resource is None:
@@ -32,3 +40,17 @@ def _set_resource_memory_limit(memory_limit_bytes: int) -> bool:
 
     setrlimit(rlimit_as, (memory_limit_bytes, rlim_infinity))
     return True
+
+
+def _start_virtual_display() -> Any | None:
+    if _xvfb is None:
+        return None
+
+    vdisplay = _xvfb()
+    vdisplay.start()
+    return vdisplay
+
+
+def _stop_virtual_display(vdisplay: Any | None) -> None:
+    if vdisplay is not None:
+        vdisplay.stop()

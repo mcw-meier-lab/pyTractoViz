@@ -47,9 +47,13 @@ from fury import actor, window
 from fury.colormap import create_colormap
 from nibabel.affines import apply_affine
 from scipy.spatial.transform import Rotation
-from xvfbwrapper import Xvfb
 
-from pytractoviz._internal.platform import _get_resource_usage, _set_resource_memory_limit
+from pytractoviz._internal.platform import (
+    _get_resource_usage,
+    _set_resource_memory_limit,
+    _start_virtual_display,
+    _stop_virtual_display,
+)
 from pytractoviz.html import create_quality_check_html, create_summary_csv
 from pytractoviz.utils import (
     ANATOMICAL_VIEW_NAMES,
@@ -4725,8 +4729,9 @@ class TractographyVisualizer:
         vdisplay = None
         if os.environ.get("XVFB", "").lower() in ("1", "true", "yes"):
             logger.info("Initializing XVFB for headless rendering")
-            vdisplay = Xvfb()
-            vdisplay.start()
+            vdisplay = _start_virtual_display()
+            if vdisplay is None:
+                logger.warning("XVFB requested but virtual display is not available on this platform")
 
         # Get output directory
         if output_dir is None:
@@ -5226,5 +5231,5 @@ class TractographyVisualizer:
         # Stop XVFB if it was started
         if vdisplay is not None:
             logger.info("Stopping XVFB")
-            vdisplay.stop()
+            _stop_virtual_display(vdisplay)
         return results

@@ -2759,7 +2759,7 @@ dependencies = [
     { name = "imageio" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "xvfbwrapper" },
+    { name = "xvfbwrapper", marker = "sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -2800,7 +2800,7 @@ requires-dist = [
     { name = "fury", specifier = ">=0.12.0" },
     { name = "imageio", specifier = ">=2.37.2" },
     { name = "numpy" },
-    { name = "xvfbwrapper", specifier = ">=0.2.15" },
+    { name = "xvfbwrapper", marker = "sys_platform == 'linux'", specifier = ">=0.2.15" },
 ]
 
 [package.metadata.requires-dev]
