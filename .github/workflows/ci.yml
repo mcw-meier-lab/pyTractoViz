@@ -26,7 +26,24 @@ env:
 
 jobs:
 
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+
+    - name: Check lockfile is up to date
+      run: uv lock --check
+
   quality:
+    needs:
+    - lockfile
     strategy:
       matrix:
         os:
@@ -60,7 +77,7 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
-        cache-dependency-glob: pyproject.toml
+        cache-dependency-glob: uv.lock
 
     - name: Install dependencies
       run: make setup
@@ -87,6 +104,7 @@ jobs:
   tests:
 
     needs:
+    - lockfile
     - quality
     strategy:
       matrix:
@@ -126,7 +144,7 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
-        cache-dependency-glob: pyproject.toml
+        cache-dependency-glob: uv.lock
         cache-suffix: ${{ matrix.resolution }}
 
     - name: Install dependencies
