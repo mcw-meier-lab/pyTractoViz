@@ -130,6 +130,34 @@ LARGE_TRACT_POINT_THRESHOLD = 100000  # >100k total points triggers large tract 
 MIN_MEMORY_CHECK_MB = 100  # Minimum estimated memory (MB) before checking availability
 
 
+def _get_resource_usage() -> Any | None:
+    """Return the current process resource usage, when supported by the platform."""
+    if sys.platform == "win32":
+        return None
+
+    getrusage = getattr(resource, "getrusage", None)
+    rusage_self = getattr(resource, "RUSAGE_SELF", None)
+    if getrusage is None or rusage_self is None:
+        return None
+
+    return getrusage(rusage_self)
+
+
+def _set_resource_memory_limit(memory_limit_bytes: int) -> bool:
+    """Set the process virtual memory limit, when supported by the platform."""
+    if sys.platform == "win32":
+        return False
+
+    setrlimit = getattr(resource, "setrlimit", None)
+    rlimit_as = getattr(resource, "RLIMIT_AS", None)
+    rlim_infinity = getattr(resource, "RLIM_INFINITY", None)
+    if setrlimit is None or rlimit_as is None or rlim_infinity is None:
+        return False
+
+    setrlimit(rlimit_as, (memory_limit_bytes, rlim_infinity))
+    return True
+
+
 def _log_memory_usage(
     label: str = "",
     *,
@@ -174,20 +202,21 @@ def _log_memory_usage(
 
     # Method 1: resource module (built-in, Unix/macOS/Linux, no dependencies)
     try:
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        # ru_maxrss is in KB on macOS, MB on Linux
-        if sys.platform == "darwin":  # macOS
-            resource_rss_mb = usage.ru_maxrss / 1024
-        else:  # Linux
-            resource_rss_mb = usage.ru_maxrss
-        memory_info["resource_rss_mb"] = round(resource_rss_mb, 2)
-        logger.log(
-            log_level,
-            "Memory usage%s (resource): RSS=%.2f MB",
-            f" [{label}]" if label else "",
-            resource_rss_mb,
-        )
-    except (OSError, AttributeError):
+        usage = _get_resource_usage()
+        if usage is not None:
+            # ru_maxrss is in KB on macOS, MB on Linux
+            if sys.platform == "darwin":  # macOS
+                resource_rss_mb = usage.ru_maxrss / 1024
+            else:  # Linux
+                resource_rss_mb = usage.ru_maxrss
+            memory_info["resource_rss_mb"] = round(resource_rss_mb, 2)
+            logger.log(
+                log_level,
+                "Memory usage%s (resource): RSS=%.2f MB",
+                f" [{label}]" if label else "",
+                resource_rss_mb,
+            )
+    except OSError:
         # resource module not available on this platform
         pass
 
@@ -295,7 +324,8 @@ def _set_memory_limit(memory_limit_mb: float | None = None) -> None:
 
         # Set virtual memory limit (RLIMIT_AS)
         # This limits the total address space the process can use
-        resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, resource.RLIM_INFINITY))
+        if not _set_resource_memory_limit(memory_limit_bytes):
+            return
 
         logger.info("Memory limit set to %.2f MB (%.2f GB)", memory_limit_mb, memory_limit_mb / 1024)
     except (OSError, ValueError) as e:
