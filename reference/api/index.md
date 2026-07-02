@@ -1,0 +1,12066 @@
+# pytractoviz
+
+pyTractoViz package.
+
+Python tools for diffusion tractography visualization
+
+Modules:
+
+- **`group_interactive_report`** – Interactive group QC report from combined_tract_stats.csv and combined_profile_data.csv.
+- **`html`** – HTML report generation for quality checking.
+- **`qc_config`** – Path configuration for the automated QC pipeline.
+- **`qc_viz`** – Automated tractography QC pipeline: views, CCI, AFQ profiles, and HTML reports.
+- **`utils`** – Utility functions for tractography visualization.
+- **`viz`** – Visualization module for diffusion tractography.
+
+Classes:
+
+- **`QCPathConfig`** – Filesystem layout for pytractoviz run inputs and outputs.
+
+Functions:
+
+- **`collect_group_qc_data`** – Scan a group QC directory and aggregate per-subject outputs.
+- **`create_quality_check_html`** – Create an interactive HTML quality check report for a single subject.
+- **`create_summary_csv`** – Create a CSV file with summary metrics for all subjects and tracts.
+- **`generate_group_interactive_html`** – Build an interactive HTML report from one or more group QC directories.
+- **`generate_group_summary_html`** – Generate a group summary HTML page with links to each subject's QC report.
+- **`generate_subject_qc_html`** – Generate a single HTML report for one subject from qc_data.json.
+- **`get_parser`** – Return the CLI argument parser.
+- **`load_qc_path_config`** – Build :class:QCPathConfig from explicit arguments, then environment variables.
+- **`main`** – Run the main program.
+- **`parse_group_spec`** – Parse a group label and QC directory from a CLI group-interactive argument.
+- **`write_combined_group_csvs`** – Write combined_tract_stats.csv and combined_profile_data.csv under group_qc_dir.
+
+## QCPathConfig
+
+```
+QCPathConfig(
+    tractography_root: Path,
+    atlas_dir: Path | None = None,
+    atlas_ref_img: Path | None = None,
+    qsiprep_root: Path | None = None,
+    qsirecon_root: Path | None = None,
+    qc_output_dir: Path | None = None,
+)
+```
+
+Filesystem layout for `pytractoviz run` inputs and outputs.
+
+Paths are resolved relative to `tractography_root` unless overridden. Use :func:`load_qc_path_config` to build an instance from CLI flags or environment variables.
+
+Methods:
+
+- **`anat_dir`** – Return the qsiprep anatomical directory for one subject.
+- **`dki_dir`** – Return the qsirecon-DKI dwi directory for one subject.
+- **`noddi_dir`** – Return the qsirecon-NODDI dwi directory for one subject.
+- **`output_dir_for_project`** – Return the group QC output directory for project.
+- **`pyafq_bundles_dir`** – Return the PYAFQ bundle .trk directory for one subject.
+- **`resolve_atlas_dir`** – Return the directory containing atlas bundle .trk files.
+- **`resolve_atlas_ref_img`** – Return the MNI brain-mask NIfTI used for atlas rendering.
+
+### anat_dir
+
+```
+anat_dir(project: str, subject: str) -> Path
+```
+
+Return the qsiprep anatomical directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def anat_dir(self, project: str, subject: str) -> Path:
+    """Return the qsiprep anatomical directory for one subject."""
+    return self._qsiprep_root() / "qsiprep" / project / subject / "anat"
+```
+
+### dki_dir
+
+```
+dki_dir(project: str, subject: str) -> Path
+```
+
+Return the qsirecon-DKI `dwi` directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def dki_dir(self, project: str, subject: str) -> Path:
+    """Return the qsirecon-DKI ``dwi`` directory for one subject."""
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "qsirecon-DKI" / subject / "dwi"
+```
+
+### noddi_dir
+
+```
+noddi_dir(project: str, subject: str) -> Path
+```
+
+Return the qsirecon-NODDI `dwi` directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def noddi_dir(self, project: str, subject: str) -> Path:
+    """Return the qsirecon-NODDI ``dwi`` directory for one subject."""
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "qsirecon-NODDI" / subject / "dwi"
+```
+
+### output_dir_for_project
+
+```
+output_dir_for_project(project: str) -> Path
+```
+
+Return the group QC output directory for `project`.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def output_dir_for_project(self, project: str) -> Path:
+    """Return the group QC output directory for ``project``."""
+    if self.qc_output_dir is not None:
+        return self.qc_output_dir
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "QC"
+```
+
+### pyafq_bundles_dir
+
+```
+pyafq_bundles_dir(project: str, subject: str) -> Path
+```
+
+Return the PYAFQ bundle `.trk` directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def pyafq_bundles_dir(self, project: str, subject: str) -> Path:
+    """Return the PYAFQ bundle ``.trk`` directory for one subject."""
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "PYAFQ" / subject / "bundles"
+```
+
+### resolve_atlas_dir
+
+```
+resolve_atlas_dir() -> Path
+```
+
+Return the directory containing atlas bundle `.trk` files.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def resolve_atlas_dir(self) -> Path:
+    """Return the directory containing atlas bundle ``.trk`` files."""
+    if self.atlas_dir is not None:
+        return self.atlas_dir
+    return self.tractography_root / _DEFAULT_ATLAS_DIR
+```
+
+### resolve_atlas_ref_img
+
+```
+resolve_atlas_ref_img() -> Path
+```
+
+Return the MNI brain-mask NIfTI used for atlas rendering.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def resolve_atlas_ref_img(self) -> Path:
+    """Return the MNI brain-mask NIfTI used for atlas rendering."""
+    if self.atlas_ref_img is not None:
+        return self.atlas_ref_img
+    return self.tractography_root / _DEFAULT_ATLAS_REF_IMG
+```
+
+## collect_group_qc_data
+
+```
+collect_group_qc_data(
+    group_qc_dir: str | Path,
+) -> GroupQcData
+```
+
+Scan a group QC directory and aggregate per-subject outputs.
+
+Returns a dict with subject_rows, suspicious_by_subject, tract_stats_rows, profile_values, tract_scores, tract_flag_stats, total_seen, total_flagged.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def collect_group_qc_data(group_qc_dir: str | Path) -> GroupQcData:
+    """
+    Scan a group QC directory and aggregate per-subject outputs.
+
+    Returns a dict with subject_rows, suspicious_by_subject, tract_stats_rows,
+    profile_values, tract_scores, tract_flag_stats, total_seen, total_flagged.
+    """
+    group_qc_dir = Path(group_qc_dir)
+    if not group_qc_dir.is_dir():
+        raise FileNotFoundError(f"Group QC directory not found: {group_qc_dir}")
+
+    subject_rows = []
+    suspicious_by_subject = {}
+    tract_stats_rows = []
+    profile_values: dict[tuple[str, str], dict[str, dict[int, float]]] = {}
+    tract_scores: dict[str, dict[str, float]] = {}
+    tract_flag_stats: dict[str, dict[str, int]] = {}
+    total_seen = 0
+    total_flagged = 0
+    for subdir in sorted(group_qc_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        qc_json = subdir / "qc_data.json"
+        qc_html = subdir / "qc_report.html"
+        tract_stats_csv = subdir / "tract_stats.csv"
+        profile_csv = subdir / "profile_data.csv"
+        report_path = None
+        if qc_html.exists() or qc_json.exists():
+            report_path = subdir.name + "/qc_report.html"
+        if report_path is None:
+            continue
+        subject_id = subdir.name
+        n_tracts = ""
+        n_suspicious = 0
+        if qc_json.exists():
+            try:
+                with open(qc_json) as f:
+                    data = json.load(f)
+                subj_key = next(iter(data.keys())) if data else subject_id
+                results = data.get(subj_key, {})
+                if isinstance(results, dict):
+                    # Count tracts with full data
+                    valid_tracts = [
+                        k
+                        for k, v in results.items()
+                        if isinstance(v, (list, tuple)) and len(v) >= _TRACT_RESULT_MIN_LEN
+                    ]
+                    n_tracts = str(len(valid_tracts))
+                    # Extract shape similarity scores for matrix
+                    for tract_name, tract_data in results.items():
+                        if not (isinstance(tract_data, (list, tuple)) and len(tract_data) >= _TRACT_RESULT_MIN_LEN):
+                            continue
+                        extra = tract_data[2]
+                        if not isinstance(extra, dict):
+                            continue
+                        # Suspicious bundle accounting
+                        flag_type = _suspicious_flag_type(extra)
+                        flagged = bool(flag_type)
+                        stats = tract_flag_stats.setdefault(tract_name, {"flagged": 0, "seen": 0})
+                        stats["seen"] += 1
+                        total_seen += 1
+                        if flagged:
+                            stats["flagged"] += 1
+                            n_suspicious += 1
+                            total_flagged += 1
+                        shape_score = extra.get("shape_score", None)
+                        parsed_shape = _optional_float(shape_score)
+                        tract_scores.setdefault(tract_name, {})[subject_id] = (
+                            np.nan if parsed_shape is None else parsed_shape
+                        )
+            except (json.JSONDecodeError, IndexError, TypeError, OSError):
+                pass
+        suspicious_by_subject[subject_id] = int(n_suspicious)
+        subject_rows.append((subject_id, n_tracts, n_suspicious, report_path))
+
+        # Parse tract_stats.csv if present (this is the primary source for group stats)
+        if tract_stats_csv.exists():
+            try:
+                with open(tract_stats_csv, newline="") as f:
+                    r = csv.DictReader(f)
+                    for row in r:
+                        if not isinstance(row, dict):
+                            continue
+                        tract = row.get("tract", "")
+                        if not tract:
+                            continue
+                        tract_stats_rows.append({"subject": subject_id, **row})
+            except OSError:
+                pass
+
+        # Parse profile_data.csv if present (node-wise values)
+        if profile_csv.exists():
+            try:
+                with open(profile_csv, newline="") as f:
+                    r = csv.DictReader(f)
+                    for row in r:
+                        if not isinstance(row, dict):
+                            continue
+                        tract = row.get("tract", "")
+                        metric = row.get("metric", "")
+                        if not tract or not metric:
+                            continue
+                        try:
+                            node = int(float(row.get("node", "")))
+                            val = float(row.get("value", ""))
+                        except (TypeError, ValueError):
+                            continue
+                        key = (tract, metric)
+                        subj_map = profile_values.setdefault(key, {})
+                        node_map = subj_map.setdefault(subject_id, {})
+                        # if duplicates exist, last one wins
+                        node_map[node] = val
+            except OSError:
+                pass
+
+    return {
+        "subject_rows": subject_rows,
+        "suspicious_by_subject": suspicious_by_subject,
+        "tract_stats_rows": tract_stats_rows,
+        "profile_values": profile_values,
+        "tract_scores": tract_scores,
+        "tract_flag_stats": tract_flag_stats,
+        "total_seen": total_seen,
+        "total_flagged": total_flagged,
+    }
+```
+
+## create_quality_check_html
+
+```
+create_quality_check_html(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str,
+    title: str = "Tractography Quality Check",
+    items_per_page: int = 50,
+) -> None
+```
+
+Create an interactive HTML quality check report for a single subject.
+
+This function generates an HTML file for one subject with search and pagination. Only the first subject in the data is used. Images in the detail view are shown in a fixed order: main tract (sagittal, axial, coronal), atlas tract (sagittal, axial, coronal), CCI plots, AFQ plots, then the rest.
+
+#### Parameters
+
+data : dict Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}} Only the first subject is used. Example: { "sub-001": { "AF_L": { "anatomical_sagittal": "path/to/image.png", "atlas_sagittal": "path/to/atlas.png", ... } } } output_file : str Path where the HTML file will be saved. title : str, optional Title for the HTML report. Default is "Tractography Quality Check". items_per_page : int, optional Number of items to display per page. Default is 50.
+
+#### Notes
+
+The report uses a single subject (first in the data), no tract dropdown, and a fixed image order in the modal: main tract sagittal/axial/coronal, atlas tract sagittal/axial/coronal, CCI plots, AFQ plots, then others.
+
+Source code in `src/pytractoviz/html.py`
+
+```
+def create_quality_check_html(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str,
+    title: str = "Tractography Quality Check",
+    items_per_page: int = 50,
+) -> None:
+    """Create an interactive HTML quality check report for a single subject.
+
+    This function generates an HTML file for one subject with search and
+    pagination. Only the first subject in the data is used. Images in the
+    detail view are shown in a fixed order: main tract (sagittal, axial,
+    coronal), atlas tract (sagittal, axial, coronal), CCI plots, AFQ plots,
+    then the rest.
+
+    Parameters
+    ----------
+    data : dict
+        Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+        Only the first subject is used. Example:
+        {
+            "sub-001": {
+                "AF_L": {
+                    "anatomical_sagittal": "path/to/image.png",
+                    "atlas_sagittal": "path/to/atlas.png",
+                    ...
+                }
+            }
+        }
+    output_file : str
+        Path where the HTML file will be saved.
+    title : str, optional
+        Title for the HTML report. Default is "Tractography Quality Check".
+    items_per_page : int, optional
+        Number of items to display per page. Default is 50.
+
+    Notes
+    -----
+    The report uses a single subject (first in the data), no tract dropdown,
+    and a fixed image order in the modal: main tract sagittal/axial/coronal,
+    atlas tract sagittal/axial/coronal, CCI plots, AFQ plots, then others.
+    """
+    # Convert file paths to relative paths for HTML
+    html_dir = Path(output_file).parent
+    data_processed: dict[str, dict[str, dict[str, str]]] = {}
+    missing_data_info: dict[str, list[dict[str, Any]]] = {}  # Track missing data per subject
+
+    for subject_id, tracts in data.items():
+        data_processed[subject_id] = {}
+        missing_data_info[subject_id] = []
+        for tract_name, media in tracts.items():
+            data_processed[subject_id][tract_name] = {}
+            missing_data_list = []
+
+            for media_type, file_path in media.items():
+                # Extract missing_data (metrics and errors are not used in HTML display)
+                if media_type == "_missing_data":
+                    if isinstance(file_path, list):
+                        missing_data_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            missing_data_list = json.loads(file_path)
+                # Handle numeric scores (like shape_similarity_score)
+                elif isinstance(file_path, (int, float)):
+                    data_processed[subject_id][tract_name][media_type] = str(file_path)
+                elif file_path and os.path.exists(file_path):
+                    # Convert to relative path from HTML file location
+                    try:
+                        rel_path = os.path.relpath(file_path, html_dir)
+                        data_processed[subject_id][tract_name][media_type] = rel_path
+                    except ValueError:
+                        # If paths are on different drives (Windows), use absolute
+                        data_processed[subject_id][tract_name][media_type] = file_path
+                elif file_path:
+                    # Store as-is if it's a string but file doesn't exist (might be a score string)
+                    data_processed[subject_id][tract_name][media_type] = file_path
+
+            # Track missing data for display (after processing all media types for this tract)
+            if missing_data_list:
+                missing_data_info[subject_id].append(
+                    {
+                        "tract": tract_name,
+                        "missing": missing_data_list,
+                    },
+                )
+
+    # Single-subject report: keep only the first subject
+    all_subjects = sorted(data_processed.keys())
+    if not all_subjects:
+        raise ValueError("No subject data provided for HTML report.")
+    first_subject = all_subjects[0]
+    data_processed = {first_subject: data_processed[first_subject]}
+    missing_data_info = {
+        first_subject: missing_data_info.get(first_subject, []),
+    }
+    subjects = [first_subject]
+    tract_names = sorted(data_processed[first_subject].keys())
+
+    # Generate HTML
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }}
+
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }}
+
+        .header h1 {{
+            margin-bottom: 0.5rem;
+        }}
+
+        .header .stats {{
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }}
+
+        .controls {{
+            background: white;
+            padding: 1.5rem;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }}
+
+        .controls-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }}
+
+        .control-group {{
+            display: flex;
+            flex-direction: column;
+        }}
+
+        .control-group label {{
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: #555;
+        }}
+
+        .control-group select,
+        .control-group input {{
+            padding: 0.6rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            transition: border-color 0.3s;
+        }}
+
+        .control-group select:focus,
+        .control-group input:focus {{
+            outline: none;
+            border-color: #667eea;
+        }}
+
+        .pagination {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }}
+
+        .pagination button {{
+            padding: 0.5rem 1rem;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+        }}
+
+        .pagination button:hover:not(:disabled) {{
+            background: #667eea;
+            color: white;
+        }}
+
+        .pagination button:disabled {{
+            opacity: 0.5;
+            cursor: not-allowed;
+        }}
+
+        .pagination .page-info {{
+            padding: 0 1rem;
+            font-weight: 600;
+        }}
+
+        .grid-container {{
+            padding: 2rem;
+            max-width: 1800px;
+            margin: 0 auto;
+        }}
+
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }}
+
+        .item-card {{
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+        }}
+
+        .item-card:hover {{
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }}
+
+        .item-header {{
+            padding: 1rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+
+        .item-header h3 {{
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+            color: #333;
+        }}
+
+        .item-header .tract-name {{
+            font-size: 0.85rem;
+            color: #667eea;
+            font-weight: 600;
+        }}
+
+        .item-media {{
+            position: relative;
+            width: 100%;
+            padding-top: 75%; /* 4:3 aspect ratio */
+            background: #f0f0f0;
+            overflow: hidden;
+        }}
+
+        .item-media img,
+        .item-media video {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: white;
+        }}
+
+        .item-media .media-placeholder {{
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #999;
+            font-size: 0.9rem;
+        }}
+
+        .item-footer {{
+            padding: 0.75rem 1rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }}
+
+        .media-badge {{
+            padding: 0.25rem 0.5rem;
+            background: #e3f2fd;
+            color: #1976d2;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }}
+
+        .score-badge {{
+            padding: 0.5rem 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            text-align: center;
+            display: inline-block;
+            margin: 0.5rem 0;
+        }}
+
+        .comparison-container {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin: 1rem 0;
+        }}
+
+        .comparison-item {{
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 0.5rem;
+            text-align: center;
+        }}
+
+        .comparison-item h5 {{
+            margin-bottom: 0.5rem;
+            color: #555;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+
+        .comparison-item img {{
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+            background: white;
+        }}
+
+        @media (max-width: 768px) {{
+            .comparison-container {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+
+        .modal {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            overflow: auto;
+        }}
+
+        .modal-content {{
+            position: relative;
+            margin: 2% auto;
+            max-width: 90%;
+            max-height: 90vh;
+            background: white;
+            border-radius: 8px;
+            padding: 2rem;
+            overflow-y: auto;
+        }}
+
+        .modal-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e0e0e0;
+        }}
+
+        .modal-header h2 {{
+            color: #333;
+        }}
+
+        .close {{
+            color: #aaa;
+            font-size: 2rem;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }}
+
+        .close:hover {{
+            color: #000;
+        }}
+
+        .modal-media-container {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+        }}
+
+        .modal-media-item {{
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 1rem;
+        }}
+
+        .modal-media-item h4 {{
+            margin-bottom: 0.5rem;
+            color: #555;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.5px;
+        }}
+
+        .modal-media-item img,
+        .modal-media-item video {{
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+            background: white;
+        }}
+
+        .no-results {{
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #999;
+        }}
+
+        .no-results h3 {{
+            margin-bottom: 0.5rem;
+            color: #666;
+        }}
+
+        .tabs {{
+            background: white;
+            padding: 0;
+            margin: 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 99;
+        }}
+
+        .tab-buttons {{
+            display: flex;
+            border-bottom: 2px solid #e0e0e0;
+            background: white;
+        }}
+
+        .tab-button {{
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }}
+
+        .tab-button:hover {{
+            background: #f8f9fa;
+            color: #333;
+        }}
+
+        .tab-button.active {{
+            color: #667eea;
+            border-bottom-color: #667eea;
+            background: white;
+        }}
+
+        .tab-content {{
+            display: none;
+        }}
+
+        .tab-content.active {{
+            display: block;
+        }}
+
+        .summary-section {{
+            background: white;
+            padding: 2rem;
+            margin: 2rem auto;
+            max-width: 1800px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+
+        .summary-section h2 {{
+            margin-bottom: 1.5rem;
+            color: #333;
+            font-size: 1.5rem;
+        }}
+
+        .summary-table-container {{
+            overflow-x: auto;
+            width: 100%;
+        }}
+
+        .summary-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            min-width: 1000px;
+        }}
+
+        .summary-table th,
+        .summary-table td {{
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+
+        .summary-table th {{
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }}
+
+        .summary-table tr:hover {{
+            background: #f8f9fa;
+        }}
+
+        .summary-table .metric-value {{
+            font-weight: 600;
+            color: #667eea;
+        }}
+
+        .summary-table .error-cell {{
+            color: #d32f2f;
+            font-size: 0.85rem;
+            max-width: 300px;
+            word-wrap: break-word;
+        }}
+
+        .summary-table .missing-cell {{
+            color: #f57c00;
+            font-size: 0.85rem;
+            max-width: 300px;
+            word-wrap: break-word;
+        }}
+
+        .summary-table .no-data {{
+            color: #999;
+            font-style: italic;
+        }}
+
+        @media (max-width: 768px) {{
+            .grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .controls-grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .modal-content {{
+                max-width: 95%;
+                padding: 1rem;
+            }}
+
+            .modal-media-container {{
+                grid-template-columns: 1fr;
+            }}
+
+            .tab-button {{
+                padding: 0.75rem 1rem;
+                font-size: 0.9rem;
+            }}
+
+            .summary-table {{
+                font-size: 0.8rem;
+            }}
+
+            .summary-table th,
+            .summary-table td {{
+                padding: 0.5rem;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{title}</h1>
+        <div class="stats">
+            <span id="total-items">{len(tract_names)} tract{"s" if len(tract_names) != 1 else ""}</span> |
+            <span id="filtered-count">Showing all items</span>
+        </div>
+    </div>
+
+    {
+        "".join(
+            f'''
+    <div class="missing-data-alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem 1.5rem; margin: 1rem 2rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem 0; color: #856404; font-size: 1.1rem;">⚠️ Missing Data</h3>
+        <p style="margin: 0 0 0.5rem 0; color: #856404;">The following tract(s) have missing data:</p>
+        <ul style="margin: 0; padding-left: 1.5rem; color: #856404;">
+            {"".join(f"<li><strong>{item['tract']}</strong>: {'; '.join(str(m) for m in item['missing'])}</li>" for item in missing_data_info[subject_id])}
+        </ul>
+    </div>
+    '''
+            for subject_id in subjects
+            if missing_data_info.get(subject_id)
+        )
+    }
+
+    <div class="controls">
+        <div class="controls-grid">
+            <div class="control-group">
+                <label for="search">Search</label>
+                <input type="text" id="search" placeholder="Search tract...">
+            </div>
+        </div>
+        <div class="pagination">
+            <button id="prev-page" disabled>Previous</button>
+            <span class="page-info">
+                Page <span id="current-page">1</span> of <span id="total-pages">1</span>
+            </span>
+            <button id="next-page">Next</button>
+        </div>
+    </div>
+
+    <div id="visualizations-tab" class="tab-content active">
+        <div class="grid-container">
+            <div class="grid" id="items-grid"></div>
+            <div class="no-results" id="no-results" style="display: none;">
+                <h3>No items found</h3>
+                <p>Try adjusting your filters or search terms</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title"></h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-media-container" id="modal-media"></div>
+        </div>
+    </div>
+
+    <script>
+        const data = {json.dumps(data_processed)};
+        const itemsPerPage = {items_per_page};
+
+        let currentPage = 1;
+        let filteredData = [];
+
+        function getMediaType(filePath) {{
+            if (!filePath) return null;
+            // Check if it's a numeric score (for shape_similarity_score)
+            if (typeof filePath === 'number' || (!isNaN(parseFloat(filePath)) && isFinite(filePath))) {{
+                return 'score';
+            }}
+            const ext = filePath.split('.').pop().toLowerCase();
+            if (['gif'].includes(ext)) return 'gif';
+            if (['mp4', 'webm', 'ogg'].includes(ext)) return 'video';
+            if (['png', 'jpg', 'jpeg', 'svg', 'webp'].includes(ext)) return 'image';
+            return 'image';
+        }}
+
+        function isComparisonType(mediaType) {{
+            return ['before_after_cci', 'atlas_comparison', 'shape_similarity_image'].includes(mediaType);
+        }}
+
+        // Fixed display order: main sagittal, atlas sagittal, main axial, atlas axial, main coronal, atlas coronal, CCI, AFQ, rest
+        const MEDIA_DISPLAY_ORDER = [
+            'anatomical_sagittal', 'atlas_sagittal', 'anatomical_axial', 'atlas_axial', 'anatomical_coronal', 'atlas_coronal',
+            'cci_histogram', 'before_cci_sagittal', 'after_cci_sagittal', 'before_cci_axial', 'after_cci_axial', 'before_cci_coronal', 'after_cci_coronal',
+            'atlas_comparison', 'shape_similarity_image'
+        ];
+        function getMediaSortKey(type) {{
+            const idx = MEDIA_DISPLAY_ORDER.indexOf(type);
+            if (idx >= 0) return idx;
+            if (type.startsWith('afq_')) return 100;
+            return 200;
+        }}
+
+        function flattenData() {{
+            const items = [];
+            for (const [subject, tracts] of Object.entries(data)) {{
+                for (const [tract, media] of Object.entries(tracts)) {{
+                    items.push({{ subject, tract, media }});
+                }}
+            }}
+            return items;
+        }}
+
+        function filterData() {{
+            const searchTerm = document.getElementById('search').value.toLowerCase();
+            filteredData = flattenData().filter(item => {{
+                return !searchTerm || item.tract.toLowerCase().includes(searchTerm);
+            }});
+
+            currentPage = 1;
+            renderItems();
+            updatePagination();
+        }}
+
+        function renderItems() {{
+            const grid = document.getElementById('items-grid');
+            const noResults = document.getElementById('no-results');
+            const filteredCount = document.getElementById('filtered-count');
+
+            if (filteredData.length === 0) {{
+                grid.style.display = 'none';
+                noResults.style.display = 'block';
+                filteredCount.textContent = 'No items found';
+                return;
+            }}
+
+            grid.style.display = 'grid';
+            noResults.style.display = 'none';
+            filteredCount.textContent = `Showing ${{filteredData.length}} item${{filteredData.length !== 1 ? 's' : ''}}`;
+
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pageItems = filteredData.slice(start, end);
+
+            grid.innerHTML = pageItems.map(item => {{
+                const mediaTypes = Object.keys(item.media);
+                // Find primary media (skip scores)
+                const primaryMedia = Object.entries(item.media).find(([type, path]) => {{
+                    const mt = getMediaType(path);
+                    return mt !== 'score' && mt !== null;
+                }});
+                const primaryMediaPath = primaryMedia ? primaryMedia[1] : null;
+                const mediaType = primaryMediaPath ? getMediaType(primaryMediaPath) : null;
+
+                // Find scores to display
+                const scores = Object.entries(item.media)
+                    .filter(([type, path]) => getMediaType(path) === 'score')
+                    .map(([type, path]) => ({{
+                        type: type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase()),
+                        value: parseFloat(path)
+                    }}));
+
+                let mediaHtml = '<div class="media-placeholder">No media available</div>';
+                if (primaryMediaPath) {{
+                    if (mediaType === 'video') {{
+                        mediaHtml = `<video src="${{primaryMediaPath}}" muted loop></video>`;
+                    }} else if (mediaType === 'gif' || mediaType === 'image') {{
+                        mediaHtml = `<img src="${{primaryMediaPath}}" alt="${{item.tract}}" loading="lazy">`;
+                    }}
+                }} else if (scores.length > 0) {{
+                    // If only scores available, display them
+                    mediaHtml = scores.map(score =>
+                        `<div class="score-badge" style="margin: 0.5rem;">${{score.type}}: ${{score.value.toFixed(3)}}</div>`
+                    ).join('');
+                }}
+
+                const badges = mediaTypes.map(type =>
+                    `<span class="media-badge">${{type}}</span>`
+                ).join('');
+
+                return `
+                    <div class="item-card" onclick="openModal('${{item.subject}}', '${{item.tract}}')">
+                        <div class="item-header">
+                            <div class="tract-name">${{item.tract}}</div>
+                        </div>
+                        <div class="item-media">
+                            ${{mediaHtml}}
+                        </div>
+                        <div class="item-footer">
+                            ${{badges}}
+                        </div>
+                    </div>
+                `;
+            }}).join('');
+        }}
+
+        function updatePagination() {{
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            document.getElementById('current-page').textContent = currentPage;
+            document.getElementById('total-pages').textContent = totalPages || 1;
+            document.getElementById('prev-page').disabled = currentPage === 1;
+            document.getElementById('next-page').disabled = currentPage >= totalPages;
+        }}
+
+        function openModal(subject, tract) {{
+            const item = filteredData.find(i => i.subject === subject && i.tract === tract);
+            if (!item) return;
+
+            document.getElementById('modal-title').textContent = tract;
+            const modalMedia = document.getElementById('modal-media');
+
+            // Separate scores and media; merge media + comparisons and sort by fixed display order
+            const scores = [];
+            const mediaItems = [];
+
+            Object.entries(item.media).forEach(([type, path]) => {{
+                if (!path) return;
+                const mediaType = getMediaType(path);
+
+                if (mediaType === 'score') {{
+                    scores.push({{ type, value: parseFloat(path) }});
+                }} else {{
+                    mediaItems.push({{ type, path, isComparison: isComparisonType(type) }});
+                }}
+            }});
+
+            mediaItems.sort((a, b) => {{
+                const ka = getMediaSortKey(a.type);
+                const kb = getMediaSortKey(b.type);
+                if (ka !== kb) return ka - kb;
+                return (a.type || '').localeCompare(b.type || '');
+            }});
+
+            function renderMediaItem(entry) {{
+                const mediaType = getMediaType(entry.path);
+                let mediaHtml = '';
+                if (mediaType === 'video') {{
+                    mediaHtml = `<video src="${{entry.path}}" controls autoplay></video>`;
+                }} else if (mediaType === 'gif' || mediaType === 'image') {{
+                    mediaHtml = `<img src="${{entry.path}}" alt="${{entry.type}}">`;
+                }}
+                const label = entry.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+
+                if (entry.type === 'before_after_cci') {{
+                    return `
+                        <div class="modal-media-item">
+                            <h4>${{label}}</h4>
+                            ${{mediaHtml}}
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; text-align: center;">
+                                <div style="font-size: 0.85rem; color: #555; font-weight: 600;">Before CCI</div>
+                                <div style="font-size: 0.85rem; color: #555; font-weight: 600;">After CCI</div>
+                            </div>
+                        </div>
+                    `;
+                }}
+                if (entry.type === 'atlas_comparison') {{
+                    const subjectImg = item.media.subject_image || item.media.atlas_comparison_subject;
+                    const atlasImg = item.media.atlas_image || item.media.atlas_comparison_atlas;
+                    if (subjectImg && atlasImg) {{
+                        const st = getMediaType(subjectImg);
+                        const at = getMediaType(atlasImg);
+                        const subjectHtml = (st === 'image' || st === 'gif') ? `<img src="${{subjectImg}}" alt="Subject">` : `<img src="${{entry.path}}" alt="Subject">`;
+                        const atlasHtml = (at === 'image' || at === 'gif') ? `<img src="${{atlasImg}}" alt="Atlas">` : `<img src="${{entry.path}}" alt="Atlas">`;
+                        return `
+                            <div class="modal-media-item">
+                                <h4>${{label}}</h4>
+                                <div class="comparison-container">
+                                    <div class="comparison-item"><h5>Subject</h5>${{subjectHtml}}</div>
+                                    <div class="comparison-item"><h5>Atlas</h5>${{atlasHtml}}</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                }}
+                if (entry.type === 'shape_similarity_image') {{
+                    const subjectImg = item.media.shape_similarity_subject;
+                    const atlasImg = item.media.shape_similarity_atlas;
+                    if (subjectImg && atlasImg) {{
+                        const st = getMediaType(subjectImg);
+                        const at = getMediaType(atlasImg);
+                        const subjectHtml = (st === 'image' || st === 'gif') ? `<img src="${{subjectImg}}" alt="Subject">` : `<img src="${{entry.path}}" alt="Subject">`;
+                        const atlasHtml = (at === 'image' || at === 'gif') ? `<img src="${{atlasImg}}" alt="Atlas">` : `<img src="${{entry.path}}" alt="Atlas">`;
+                        return `
+                            <div class="modal-media-item">
+                                <h4>${{label}}</h4>
+                                <div class="comparison-container">
+                                    <div class="comparison-item"><h5>Subject</h5>${{subjectHtml}}</div>
+                                    <div class="comparison-item"><h5>Atlas</h5>${{atlasHtml}}</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                }}
+                return `
+                    <div class="modal-media-item">
+                        <h4>${{label}}</h4>
+                        ${{mediaHtml}}
+                    </div>
+                `;
+            }}
+
+            let html = '';
+
+            if (scores.length > 0) {{
+                html += scores.map(score => `
+                    <div class="modal-media-item">
+                        <h4>${{score.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
+                        <div class="score-badge">${{score.value.toFixed(3)}}</div>
+                    </div>
+                `).join('');
+            }}
+
+            html += mediaItems.map(renderMediaItem).join('');
+
+            modalMedia.innerHTML = html;
+
+            document.getElementById('modal').style.display = 'block';
+        }}
+
+        function closeModal() {{
+            document.getElementById('modal').style.display = 'none';
+        }}
+
+        // Event listeners
+        document.getElementById('search').addEventListener('input', filterData);
+        document.getElementById('prev-page').addEventListener('click', () => {{
+            if (currentPage > 1) {{
+                currentPage--;
+                renderItems();
+                updatePagination();
+                window.scrollTo({{ top: 0, behavior: 'smooth' }});
+            }}
+        }});
+        document.getElementById('next-page').addEventListener('click', () => {{
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            if (currentPage < totalPages) {{
+                currentPage++;
+                renderItems();
+                updatePagination();
+                window.scrollTo({{ top: 0, behavior: 'smooth' }});
+            }}
+        }});
+        document.querySelector('.close').addEventListener('click', closeModal);
+        document.getElementById('modal').addEventListener('click', (e) => {{
+            if (e.target.id === 'modal') closeModal();
+        }});
+
+        // Initialize
+        filterData();
+    </script>
+</body>
+</html>"""
+
+    # Write HTML file
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html_content)
+```
+
+## create_summary_csv
+
+```
+create_summary_csv(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str | Path,
+) -> None
+```
+
+Create a CSV file with summary metrics for all subjects and tracts.
+
+#### Parameters
+
+data : dict Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}} Same format as create_quality_check_html. output_file : str | Path Path where the CSV file will be saved.
+
+#### Notes
+
+The CSV includes the following columns:
+
+- Subject: Subject ID
+- Tract: Tract name
+- Initial Streamlines: Count before CCI filtering
+- After CCI Filter: Count after CCI filtering
+- CCI Mean: Mean CCI value
+- CCI Median: Median CCI value
+- Shape Similarity: Shape similarity score
+- Errors: List of errors (semicolon-separated)
+- Missing Data: List of missing data items (semicolon-separated)
+
+Source code in `src/pytractoviz/html.py`
+
+```
+def create_summary_csv(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str | Path,
+) -> None:
+    """Create a CSV file with summary metrics for all subjects and tracts.
+
+    Parameters
+    ----------
+    data : dict
+        Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+        Same format as create_quality_check_html.
+    output_file : str | Path
+        Path where the CSV file will be saved.
+
+    Notes
+    -----
+    The CSV includes the following columns:
+    - Subject: Subject ID
+    - Tract: Tract name
+    - Initial Streamlines: Count before CCI filtering
+    - After CCI Filter: Count after CCI filtering
+    - CCI Mean: Mean CCI value
+    - CCI Median: Median CCI value
+    - Shape Similarity: Shape similarity score
+    - Errors: List of errors (semicolon-separated)
+    - Missing Data: List of missing data items (semicolon-separated)
+    """
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Collect summary data from all subjects
+    summary_rows: list[dict[str, Any]] = []
+
+    for subject_id, tracts in data.items():
+        for tract_name, media in tracts.items():
+            metrics_dict = {}
+            errors_list = []
+            missing_data_list = []
+
+            for media_type, file_path in media.items():
+                # Extract metrics, errors, and missing_data
+                if media_type == "_metrics":
+                    if isinstance(file_path, dict):
+                        metrics_dict = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            metrics_dict = json.loads(file_path)
+                elif media_type == "_errors":
+                    if isinstance(file_path, list):
+                        errors_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            errors_list = json.loads(file_path)
+                elif media_type == "_missing_data":
+                    if isinstance(file_path, list):
+                        missing_data_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            missing_data_list = json.loads(file_path)
+
+            # Create row for this subject/tract combination
+            row = {
+                "Subject": subject_id,
+                "Tract": tract_name,
+                "Initial Streamlines": metrics_dict.get("initial_streamline_count", ""),
+                "After CCI Filter": metrics_dict.get("cci_after_filter_count", ""),
+                "CCI Mean": metrics_dict.get("cci_mean", ""),
+                "CCI Median": metrics_dict.get("cci_median", ""),
+                "Shape Similarity": metrics_dict.get("shape_similarity_score", ""),
+                "Errors": "; ".join(str(e) for e in errors_list) if errors_list else "",
+                "Missing Data": "; ".join(str(m) for m in missing_data_list) if missing_data_list else "",
+            }
+            summary_rows.append(row)
+
+    # Write CSV file
+    if summary_rows:
+        fieldnames = [
+            "Subject",
+            "Tract",
+            "Initial Streamlines",
+            "After CCI Filter",
+            "CCI Mean",
+            "CCI Median",
+            "Shape Similarity",
+            "Errors",
+            "Missing Data",
+        ]
+
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(summary_rows)
+```
+
+## generate_group_interactive_html
+
+```
+generate_group_interactive_html(
+    group_specs: list[tuple[str, Path]],
+    output_html_path: Path | None = None,
+    *,
+    refresh_csv: bool = False,
+) -> str
+```
+
+Build an interactive HTML report from one or more group QC directories.
+
+The output is a self-contained HTML file using Plotly.js (CDN) for interactive tract stats, heatmaps, and profile ribbon plots.
+
+#### Parameters
+
+group_specs : list of (str, Path) `(label, group_dir)` pairs. Labels must be unique. output_html_path : Path, optional Destination HTML path. Defaults to `group_dir/group_interactive.html` for a single group, or `group_interactive_comparison.html` in the first group directory when multiple groups are provided. refresh_csv : bool, optional If True, rescan subject subdirs and rewrite combined CSVs before loading.
+
+#### Returns
+
+str Path to the written HTML file.
+
+#### Raises
+
+ValueError If no groups are provided, labels are duplicated, or no data is found.
+
+Source code in `src/pytractoviz/group_interactive_report.py`
+
+```
+def generate_group_interactive_html(
+    group_specs: list[tuple[str, Path]],
+    output_html_path: Path | None = None,
+    *,
+    refresh_csv: bool = False,
+) -> str:
+    """
+    Build an interactive HTML report from one or more group QC directories.
+
+    The output is a self-contained HTML file using Plotly.js (CDN) for
+    interactive tract stats, heatmaps, and profile ribbon plots.
+
+    Parameters
+    ----------
+    group_specs : list of (str, Path)
+        ``(label, group_dir)`` pairs. Labels must be unique.
+    output_html_path : Path, optional
+        Destination HTML path. Defaults to ``group_dir/group_interactive.html``
+        for a single group, or ``group_interactive_comparison.html`` in the
+        first group directory when multiple groups are provided.
+    refresh_csv : bool, optional
+        If True, rescan subject subdirs and rewrite combined CSVs before loading.
+
+    Returns
+    -------
+    str
+        Path to the written HTML file.
+
+    Raises
+    ------
+    ValueError
+        If no groups are provided, labels are duplicated, or no data is found.
+    """
+    if not group_specs:
+        raise ValueError("At least one group must be provided")
+
+    labels = [label for label, _ in group_specs]
+    if len(labels) != len(set(labels)):
+        raise ValueError("Group labels must be unique")
+
+    all_tract_rows: list[dict] = []
+    all_profile_rows: list[dict] = []
+    for label, group_dir_raw in group_specs:
+        group_dir = Path(group_dir_raw)
+        tract_rows, profile_rows = load_group_combined_data(
+            group_dir,
+            label,
+            refresh_csv=refresh_csv,
+        )
+        all_tract_rows.extend(tract_rows)
+        all_profile_rows.extend(profile_rows)
+
+    if not all_tract_rows and not all_profile_rows:
+        raise ValueError("No combined tract stats or profile data found for any group")
+
+    profile_rows_for_ribbon = _filter_profile_rows(all_profile_rows)
+
+    groups = [label for label, _ in group_specs]
+    tracts = sorted({r["tract"] for r in all_tract_rows})
+    profile_tracts = sorted({r["tract"] for r in profile_rows_for_ribbon})
+    profile_metrics = sorted({r["metric"] for r in profile_rows_for_ribbon})
+    numeric_columns = _numeric_columns_from_rows(all_tract_rows)
+    overview = _group_overview(all_tract_rows, all_profile_rows)
+    profile_summaries = _summarize_profiles(profile_rows_for_ribbon)
+
+    payload = {
+        "groups": groups,
+        "overview": overview,
+        "tract_stats": all_tract_rows,
+        "numeric_columns": numeric_columns,
+        "tracts": tracts,
+        "profile_tracts": profile_tracts,
+        "profile_metrics": profile_metrics,
+        "profile_summaries": profile_summaries,
+    }
+
+    if output_html_path is None:
+        if len(group_specs) == 1:
+            output_html_path = Path(group_specs[0][1]) / "group_interactive.html"
+        else:
+            output_html_path = Path(group_specs[0][1]) / "group_interactive_comparison.html"
+    output_html_path = Path(output_html_path)
+    output_html_path.parent.mkdir(parents=True, exist_ok=True)
+
+    data_json = json.dumps(payload, separators=(",", ":"))
+    html = _INTERACTIVE_HTML_TEMPLATE.replace("__DATA_JSON__", data_json)
+    output_html_path.write_text(html, encoding="utf-8")
+    return str(output_html_path)
+```
+
+## generate_group_summary_html
+
+```
+generate_group_summary_html(
+    group_qc_dir: str | Path,
+    output_html_path: str | Path | None = None,
+    *,
+    pairwise_shape: bool = True,
+    pairwise_shape_max_streamlines: int = 4000,
+    pairwise_shape_jobs: int = 1,
+) -> str
+```
+
+Generate a group summary HTML page with links to each subject's QC report.
+
+Scans group_qc_dir for subdirectories that contain qc_data.json (or qc_report.html), then builds a QC triage page: flagged-bundle summaries, shape-similarity diagnostics, and a subject index. Also writes combined CSVs and group_interactive.html for interactive tract/profile exploration (replaces static boxplots and profile ribbons).
+
+path to the parent QC directory (e.g. .../derivatives/QC) containing
+
+one subdir per subject, each with qc_data.json and qc_report.html.
+
+output_html_path: where to write the summary HTML (default: group_qc_dir/group_summary.html) pairwise_shape: if True, compute subjectxsubject shape similarity from bundle .trk files under each subject's tract subfolders: one matrix per tract (BUAN-style) plus a summary matrix averaged across tracts. pairwise_shape_max_streamlines: cap passed to pairwise shape (0 or None = no cap). pairwise_shape_jobs: parallel tract workers for pairwise shape (1 = serial). Each worker loads one tract's bundles once per subject then scores all pairs.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def generate_group_summary_html(
+    group_qc_dir: str | Path,
+    output_html_path: str | Path | None = None,
+    *,
+    pairwise_shape: bool = True,
+    pairwise_shape_max_streamlines: int = 4000,
+    pairwise_shape_jobs: int = 1,
+) -> str:
+    """
+    Generate a group summary HTML page with links to each subject's QC report.
+
+    Scans group_qc_dir for subdirectories that contain qc_data.json (or qc_report.html),
+    then builds a QC triage page: flagged-bundle summaries, shape-similarity diagnostics,
+    and a subject index. Also writes combined CSVs and group_interactive.html for
+    interactive tract/profile exploration (replaces static boxplots and profile ribbons).
+
+    group_qc_dir: path to the parent QC directory (e.g. .../derivatives/QC) containing
+                  one subdir per subject, each with qc_data.json and qc_report.html.
+    output_html_path: where to write the summary HTML (default: group_qc_dir/group_summary.html)
+    pairwise_shape: if True, compute subjectxsubject shape similarity from bundle .trk files
+                    under each subject's tract subfolders: one matrix per tract (BUAN-style)
+                    plus a summary matrix averaged across tracts.
+    pairwise_shape_max_streamlines: cap passed to pairwise shape (0 or None = no cap).
+    pairwise_shape_jobs: parallel tract workers for pairwise shape (1 = serial). Each worker
+                          loads one tract's bundles once per subject then scores all pairs.
+    """
+    group_qc_dir = Path(group_qc_dir)
+    if output_html_path is None:
+        output_html_path = group_qc_dir / "group_summary.html"
+    output_html_path = Path(output_html_path)
+
+    collected = collect_group_qc_data(group_qc_dir)
+    subject_rows = collected["subject_rows"]
+    suspicious_by_subject = collected["suspicious_by_subject"]
+    tract_stats_rows = collected["tract_stats_rows"]
+    profile_values = collected["profile_values"]
+    tract_scores = collected["tract_scores"]
+    tract_flag_stats = collected["tract_flag_stats"]
+    total_seen = collected["total_seen"]
+    total_flagged = collected["total_flagged"]
+
+    write_combined_group_csvs(group_qc_dir, tract_stats_rows, profile_values)
+
+    interactive_rel = "group_interactive.html"
+    interactive_written = False
+    try:
+        from pytractoviz.group_interactive_report import generate_group_interactive_html  # noqa: PLC0415
+
+        generate_group_interactive_html(
+            [(group_qc_dir.name, group_qc_dir)],
+            group_qc_dir / interactive_rel,
+        )
+        interactive_written = True
+    except (ImportError, OSError, ValueError, RuntimeError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        logger.warning("Could not generate group interactive report: %s", exc)
+
+    chunks = []
+    chunks.append("""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QC Group Summary</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 2rem; background: #f4f4f5; color: #27272a; }
+    h1 { color: #18181b; border-bottom: 1px solid #d4d4d8; padding-bottom: 0.5rem; }
+    h2 { color: #1e40af; }
+    table { border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem 1rem; text-align: left; border: 1px solid #d4d4d8; }
+    th { background: #f4f4f5; color: #1e40af; }
+    tr:nth-child(even) { background: #fafafa; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .count { color: #52525b; }
+  </style>
+</head>
+<body>
+  <h1>QC Group Summary</h1>
+  <p>Subject-level QC reports. Click a subject to open their full report.</p>
+""")
+    if interactive_written:
+        chunks.append(
+            f"""  <p><a href="{interactive_rel}">Open interactive stats explorer</a> """
+            """— tract metrics, profiles, and group comparisons from combined CSV data.</p>
+""",
+        )
+
+    chunks.append(
+        """
+  <p><strong>Flagged bundles:</strong> """
+        + str(total_flagged)
+        + """ / """
+        + str(total_seen)
+        + """ evaluated bundles (shape similarity &lt; 0.2 and/or CCI retention &lt; 20%)</p>
+""",
+    )
+
+    # Bar chart: suspicious bundle counts per subject
+    if suspicious_by_subject:
+        try:
+            subj_ids = sorted(suspicious_by_subject.keys())
+            counts = [int(suspicious_by_subject[sid]) for sid in subj_ids]
+            fig, ax = plt.subplots(1, figsize=(max(8, 0.35 * len(subj_ids)), 4))
+            ax.bar(np.arange(len(subj_ids)), counts, color="#a36b3a", alpha=0.85)
+            ax.set_xticks(np.arange(len(subj_ids)))
+            ax.set_xticklabels(subj_ids, rotation=90)
+            ax.set_ylabel("Suspicious bundles (count)")
+            ax.set_title("Suspicious bundle counts per subject")
+            ax.grid(axis="y", color="#333333", linestyle="--", linewidth=0.6, alpha=0.7)
+            fig.tight_layout()
+            suspicious_path = group_qc_dir / "suspicious_counts_per_subject.png"
+            fig.savefig(suspicious_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            chunks.append(
+                """  <h2>Suspicious bundle counts</h2>
+  <p>Number of tracts flagged as suspicious per subject.</p>
+  <p><img src="suspicious_counts_per_subject.png" alt="Suspicious counts per subject" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>""",
+            )
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            logger.warning("Failed to write suspicious bundle counts chart: %s", exc)
+
+    if tract_flag_stats:
+        tract_rows = sorted(
+            tract_flag_stats.items(),
+            key=lambda kv: (
+                -(kv[1]["flagged"] / kv[1]["seen"] if kv[1]["seen"] else 0.0),
+                -kv[1]["flagged"],
+                kv[0],
+            ),
+        )
+        chunks.append("""
+  <h2>Suspicious frequency by tract</h2>
+  <p>How often each tract was flagged as suspicious across available subjects.</p>
+  <table>
+    <thead><tr><th>Tract</th><th>Flagged</th><th>Seen</th><th>Flag rate</th></tr></thead>
+    <tbody>
+""")
+        for tract_name, stats in tract_rows:
+            seen = stats["seen"]
+            flagged = stats["flagged"]
+            rate = (100.0 * flagged / seen) if seen else 0.0
+            chunks.append(
+                f'      <tr><td>{tract_name}</td><td class="count">{flagged}</td><td class="count">{seen}</td><td class="count">{rate:.1f}%</td></tr>',
+            )
+        chunks.append("""    </tbody>
+  </table>
+""")
+
+    # Shape similarity heatmap (subject vs atlas); distributions live in interactive report.
+    if tract_scores:
+        # Stable ordering for axes
+        all_tracts = sorted(tract_scores.keys())
+        all_subjects = sorted({sid for tdict in tract_scores.values() for sid in tdict})
+        if all_tracts and all_subjects:
+            mat = np.full((len(all_subjects), len(all_tracts)), np.nan, dtype=float)
+            for j, tract_name in enumerate(all_tracts):
+                scores_by_subj = tract_scores.get(tract_name, {})
+                for i, sid in enumerate(all_subjects):
+                    val = scores_by_subj.get(sid, np.nan)
+                    try:
+                        mat[i, j] = float(val)
+                    except (TypeError, ValueError):
+                        mat[i, j] = np.nan
+            # Plot heatmap; NaNs will appear as a separate color
+            fig, ax = plt.subplots(1, figsize=(max(6, 0.4 * len(all_tracts)), max(4, 0.3 * len(all_subjects))))
+            cmap = plt.get_cmap("viridis").copy()
+            cmap.set_bad(color="#444444")  # dark gray for missing
+            im = ax.imshow(mat, aspect="auto", interpolation="nearest", cmap=cmap)
+            ax.set_xticks(np.arange(len(all_tracts)))
+            ax.set_xticklabels(all_tracts, rotation=90)
+            ax.set_yticks(np.arange(len(all_subjects)))
+            ax.set_yticklabels(all_subjects)
+            ax.set_xlabel("Tract")
+            ax.set_ylabel("Subject")
+            ax.set_title("Shape similarity (subject vs atlas)")
+            cbar = fig.colorbar(im, ax=ax)
+            cbar.set_label("Shape similarity score")
+            fig.tight_layout()
+            matrix_path = group_qc_dir / "shape_similarity_matrix.png"
+            fig.savefig(matrix_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            # Add section with the generated matrix image
+            chunks.append("""  <h2>Shape similarity across subjects and tracts</h2>
+  <p>Heatmap of shape similarity scores (subject bundles vs. atlas bundles) for all subjects and tracts with available data.</p>
+  <p><img src="shape_similarity_matrix.png" alt="Shape similarity matrix" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>""")
+
+            # Subject-subject bundle shape similarity: per-tract (BUAN-style) + mean across tracts
+            if pairwise_shape and len(all_subjects) >= _MIN_PAIRWISE_SHAPE_SUBJECTS:
+                try:
+                    n_sub = len(all_subjects)
+                    pair_sum = np.zeros((n_sub, n_sub), dtype=float)
+                    pair_count = np.zeros((n_sub, n_sub), dtype=int)
+                    by_tract_dir = group_qc_dir / "shape_similarity_subject_by_tract"
+                    by_tract_dir.mkdir(parents=True, exist_ok=True)
+                    per_tract_sections = []
+
+                    tract_tasks = []
+                    for tract_name in all_tracts:
+                        paths = [find_qc_bundle_trk(group_qc_dir / sid, tract_name) for sid in all_subjects]
+                        path_strs = [str(p.resolve()) if p is not None and p.exists() else None for p in paths]
+                        tract_tasks.append(
+                            (tract_name, path_strs, pairwise_shape_max_streamlines),
+                        )
+
+                    nj = max(1, int(pairwise_shape_jobs))
+                    tract_results = []
+                    if nj <= 1:
+                        for tract_name, path_strs, msl in tract_tasks:
+                            path_list = [Path(p) if p else None for p in path_strs]
+                            cap = _normalize_streamline_cap(msl)
+                            mat_t, had_off = _compute_pairwise_shape_one_tract(
+                                path_list,
+                                n_sub,
+                                cap,
+                            )
+                            tract_results.append((tract_name, mat_t, had_off))
+                    else:
+                        mp_ctx = mp.get_context("spawn")
+                        with ProcessPoolExecutor(max_workers=nj, mp_context=mp_ctx) as ex:
+                            futures = [ex.submit(_pairwise_shape_tract_worker, t) for t in tract_tasks]
+                            for fut in as_completed(futures):
+                                tract_results.append(fut.result())
+                    tract_results.sort(key=lambda r: r[0])
+
+                    for tract_name, mat_t, had_off_diagonal in tract_results:
+                        if not had_off_diagonal:
+                            continue
+                        for ii in range(n_sub):
+                            for jj in range(ii + 1, n_sub):
+                                v = mat_t[ii, jj]
+                                if np.isfinite(v):
+                                    pair_sum[ii, jj] += float(v)
+                                    pair_sum[jj, ii] += float(v)
+                                    pair_count[ii, jj] += 1
+                                    pair_count[jj, ii] += 1
+
+                        safe = _safe_tract_filename(tract_name)
+                        stem = by_tract_dir / safe
+                        save_subject_subject_shape_matrix_assets(
+                            stem,
+                            mat_t,
+                            all_subjects,
+                            title=f"Shape similarity (pairwise): {tract_name}",
+                            cbar_label="Shape similarity",
+                        )
+                        rel_png = f"shape_similarity_subject_by_tract/{safe}.png"
+                        rel_csv = f"shape_similarity_subject_by_tract/{safe}.csv"
+                        per_tract_sections.append(
+                            (
+                                tract_name,
+                                safe,
+                                f"""  <h3 id="pairwise-tract-{safe}">{tract_name}</h3>
+  <p><img src="{rel_png}" alt="Pairwise shape similarity {tract_name}" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>
+  <p><code>{rel_csv}</code></p>""",
+                            ),
+                        )
+
+                    subj_mat = np.full((n_sub, n_sub), np.nan, dtype=float)
+                    np.fill_diagonal(subj_mat, 1.0)
+                    for ii in range(n_sub):
+                        for jj in range(n_sub):
+                            if ii == jj:
+                                continue
+                            c = pair_count[ii, jj]
+                            if c > 0:
+                                subj_mat[ii, jj] = pair_sum[ii, jj] / float(c)
+
+                    save_subject_subject_shape_matrix_assets(
+                        group_qc_dir / "shape_similarity_subject_matrix",
+                        subj_mat,
+                        all_subjects,
+                        title="Shape similarity: subject vs subject (mean across tracts)",
+                        cbar_label="Mean shape similarity",
+                    )
+
+                    intro = """  <h2>Subject-subject shape similarity</h2>
+  <p>Pairwise bundle shape similarity using DIPY <code>bundle_shape_similarity</code> (same family of scores as BUAN). Bundles are read from <code>&lt;subject&gt;/&lt;tract&gt;/</code> (preferring <code>*_cci_keep.trk</code>). The diagonal is 1. Off-diagonal cells are gray when that pair could not be compared for any tract.</p>
+  <h3>Mean across tracts</h3>
+  <p>Each off-diagonal entry averages the pairwise score over tracts where both subjects had a <code>.trk</code> file.</p>
+  <p><img src="shape_similarity_subject_matrix.png" alt="Mean subject-subject shape similarity" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>
+  <p><code>shape_similarity_subject_matrix.csv</code></p>"""
+
+                    if per_tract_sections:
+                        toc_items = "".join(
+                            f'    <li><a href="#pairwise-tract-{safe}">{tract_name}</a></li>\n'
+                            for tract_name, safe, _sec in per_tract_sections
+                        )
+                        per_block = (
+                            """  <h3>Per-tract pairwise matrices (BUAN-style)</h3>
+  <p>One subjectxsubject matrix per bundle—only the tract shown is used for that heatmap.</p>
+  <ul>
+"""
+                            + toc_items
+                            + """  </ul>
+"""
+                            + "\n".join(sec for _tn, _sf, sec in per_tract_sections)
+                        )
+                    else:
+                        per_block = (
+                            "  <p><em>No per-tract pairwise matrices were written "
+                            "(need bundle <code>.trk</code> files under each subject's tract folders).</em></p>"
+                        )
+
+                    chunks.append(intro + "\n" + per_block)
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    logger.warning("Failed to generate pairwise shape similarity matrices: %s", exc)
+
+    chunks.append("""
+  <h2>Subjects</h2>
+  <table>
+    <thead><tr><th>Subject</th><th>Tracts</th><th>Flagged</th><th>Report</th></tr></thead>
+    <tbody>
+""")
+    for subject_id, n_tracts, n_flagged, report_path in subject_rows:
+        link = (
+            f'      <tr><td>{subject_id}</td><td class="count">{n_tracts}</td>'
+            f'<td class="count">{n_flagged}</td>'
+            f'<td><a href="{report_path}">Open report</a></td></tr>'
+        )
+        chunks.append(link)
+
+    chunks.append("""    </tbody>
+  </table>
+""")
+
+    chunks.append("""
+</body>
+</html>""")
+
+    html = "\n".join(chunks)
+    output_html_path.write_text(html, encoding="utf-8")
+    return str(output_html_path)
+```
+
+## generate_subject_qc_html
+
+```
+generate_subject_qc_html(
+    qc_data_path: str | Path,
+    output_html_path: str | Path | None = None,
+) -> str
+```
+
+Generate a single HTML report for one subject from qc_data.json.
+
+qc_data_path: path to qc_data.json (e.g. output_dir/subject/qc_data.json) output_html_path: where to write the HTML file (default: same dir as qc_data.json, name qc_report.html)
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def generate_subject_qc_html(
+    qc_data_path: str | Path,
+    output_html_path: str | Path | None = None,
+) -> str:
+    """
+    Generate a single HTML report for one subject from qc_data.json.
+
+    qc_data_path: path to qc_data.json (e.g. output_dir/subject/qc_data.json)
+    output_html_path: where to write the HTML file (default: same dir as qc_data.json, name qc_report.html)
+    """
+    qc_data_path = Path(qc_data_path)
+    if not qc_data_path.exists():
+        raise FileNotFoundError(f"QC data not found: {qc_data_path}")
+    base_dir = qc_data_path.parent
+    if output_html_path is None:
+        output_html_path = base_dir / "qc_report.html"
+    output_html_path = Path(output_html_path)
+
+    with open(qc_data_path) as f:
+        data = json.load(f)
+
+    # Expect one subject in the file
+    subjects = list(data.keys())
+    if not subjects:
+        raise ValueError("qc_data.json has no subject keys")
+    subject_id = subjects[0]
+    results = data[subject_id]
+
+    def rel(path: str | Path | None) -> str:
+        """Path relative to report base (subject output dir) for correct img src (tract subfolders or shared atlas_views)."""
+        if not path:
+            return ""
+        p = Path(path)
+        try:
+            return str(p.relative_to(base_dir))
+        except ValueError:
+            # Path is outside base_dir (e.g. shared atlas_views); use relpath so ../atlas_views/... works
+            return os.path.relpath(str(p), str(base_dir))
+
+    # Stable tract ordering across subjects/reports.
+    preferred_order = [
+        "CCForcepsMajor",
+        "CCForcepsMinor",
+        "CCMid",
+        "MCP",
+        "CSTL",
+        "CSTR",
+        "CL",
+        "CR",
+        "AFL",
+        "AFR",
+        "IFOFL",
+        "IFOFR",
+        "UFL",
+        "UFR",
+        "FL",
+        "FR",
+    ]
+    order_index = {name: ii for ii, name in enumerate(preferred_order)}
+
+    def tract_sort_key(name: str) -> tuple[int, str]:
+        # Unknown names go after known names, then alphabetical.
+        return (order_index.get(name, len(preferred_order)), name)
+
+    def suspicious_flags(extra: Any) -> tuple[str, str]:
+        """Return suspicious-bundle flag type and reason.
+
+        flag_type is one of:
+        - "" (not flagged)
+        - "low_shape"
+        - "low_cci_retention".
+        """
+        if not isinstance(extra, dict):
+            return "", ""
+
+        shape = _optional_float(extra.get("shape_score"))
+        pct = _optional_float(extra.get("pct_retained", extra.get("cci_pct_retained")))
+
+        if shape is not None and shape < _SUSPICIOUS_SHAPE_THRESHOLD:
+            return "low_shape", f"low shape similarity ({shape:.3f} < 0.2)"
+        if pct is not None and pct < _SUSPICIOUS_CCI_RETENTION_PCT:
+            return "low_cci_retention", f"low CCI retention ({pct:.1f}% < 20%)"
+        return "", ""
+
+    chunks = []
+    chunks.append(
+        """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QC Report — """
+        + subject_id
+        + """</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 2rem; background: #f4f4f5; color: #27272a; }
+    h1 { color: #18181b; border-bottom: 1px solid #d4d4d8; padding-bottom: 0.5rem; }
+    h2 { color: #1e40af; margin-top: 2rem; }
+    h3 { color: #166534; margin-top: 1.5rem; }
+    .tract { margin-bottom: 2.5rem; padding: 1rem; border: 1px solid #d4d4d8; border-radius: 8px; background: #ffffff; }
+    .tract.suspicious { border-color: #ca8a04; box-shadow: 0 0 0 1px rgba(202, 138, 4, 0.25) inset; }
+    .section { margin: 1rem 0; }
+    .section h4 { color: #a16207; margin: 0.5rem 0; }
+    .grid { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+    .grid img { max-width: 320px; height: auto; border: 1px solid #d4d4d8; border-radius: 4px; }
+    .grid .cell { flex: 0 0 auto; }
+    .score { font-size: 1.1rem; color: #15803d; }
+    .flag { display: inline-block; margin-left: 0.5rem; padding: 0.15rem 0.45rem; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 0.8rem; vertical-align: middle; }
+    .flag-note { color: #a16207; margin-top: 0.25rem; }
+    .note { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; border: 1px solid #d4d4d8; border-radius: 8px; background: #ffffff; color: #3f3f46; }
+    .note strong { color: #18181b; }
+    .note table { border-collapse: collapse; margin-top: 0.5rem; }
+    .note th, .note td { padding: 0.35rem 0.65rem; text-align: left; border: 1px solid #d4d4d8; }
+    .note th { background: #f4f4f5; color: #1e40af; }
+  </style>
+</head>
+<body>
+  <h1>QC Report: """
+        + subject_id
+        + """</h1>
+""",
+    )
+
+    run_info = results.get("_run_info") if isinstance(results, dict) else None
+    if isinstance(run_info, dict) and run_info:
+        chunks.append('  <div class="note">')
+        chunks.append("    <p><strong>Run settings</strong></p>")
+        chunks.append("    <table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>")
+        for k, v in run_info.items():
+            chunks.append(f"      <tr><td>{k}</td><td>{v}</td></tr>")
+        chunks.append("    </tbody></table>")
+        chunks.append("  </div>")
+
+    # Summary of flagged tracts for this subject
+    flagged_tracts = []
+    if isinstance(results, dict):
+        for tract_name in results:
+            tract_data = results.get(tract_name)
+            if not isinstance(tract_data, (list, tuple)) or len(tract_data) < _TRACT_RESULT_MIN_LEN:
+                continue
+            extra = tract_data[2]
+            flag_type, _reason = suspicious_flags(extra)
+            if flag_type:
+                flagged_tracts.append((tract_name, extra))
+
+    def _flagged_tract_summary(name: str, extra: Any) -> str:
+        score_bits = []
+        shape = _optional_float(extra.get("shape_score"))
+        if shape is not None:
+            score_bits.append(f"shape {shape:.3f}")
+        pct = _optional_float(extra.get("pct_retained", extra.get("cci_pct_retained")))
+        if pct is not None:
+            score_bits.append(f"retention {pct:.1f}%")
+        if score_bits:
+            return f"{name} ({', '.join(score_bits)})"
+        return name
+
+    if flagged_tracts:
+        flagged_tracts.sort(key=lambda kv: tract_sort_key(kv[0]))
+        tract_names = ", ".join(_flagged_tract_summary(name, extra) for name, extra in flagged_tracts)
+        chunks.append('  <div class="note">')
+        chunks.append(
+            f"    <p><strong>Flagged tracts:</strong> {len(flagged_tracts)} "
+            f"(shape similarity &lt; 0.2 and/or CCI retention &lt; 20%) — {tract_names}</p>",
+        )
+        chunks.append("  </div>")
+
+    subject_anatomy = results.get("_subject_anatomy")
+    if isinstance(subject_anatomy, dict) and subject_anatomy:
+        chunks.append('  <div class="section"><h2>Subject anatomy</h2>')
+        chunks.append("    <p>All bundles overlaid on orthogonal T1 slices through brain center.</p>")
+        chunks.append('    <div class="grid">')
+        for view in ["coronal", "axial", "sagittal"]:
+            p = subject_anatomy.get(view)
+            if p:
+                chunks.append(
+                    f'      <div class="cell"><img src="{rel(p)}" alt="anatomy {view}" title="Subject anatomy {view}"/></div>',
+                )
+        chunks.append("    </div></div>")
+
+    for tract_name in sorted(results.keys(), key=tract_sort_key):
+        tract_data = results.get(tract_name)
+        if not isinstance(tract_data, (list, tuple)) or len(tract_data) < _TRACT_RESULT_MIN_LEN:
+            continue
+        # subject_views, cci_plots, dti_res, noddi_res, extra = tract_data[0], tract_data[1], tract_data[2], tract_data[3], tract_data[4]
+        subject_views, cci_plots, extra = tract_data[0], tract_data[1], tract_data[2]
+        shape_score = extra.get("shape_score", "")
+        flag_type, suspicious_reason = suspicious_flags(extra)
+        is_suspicious = bool(flag_type)
+
+        tract_class = "tract suspicious" if is_suspicious else "tract"
+        chunks.append(f'  <div class="{tract_class}">')
+        if is_suspicious:
+            chunks.append(f'    <h2>{tract_name}<span class="flag">Suspicious</span></h2>')
+            chunks.append(f'    <p class="flag-note">Flag reason: {suspicious_reason}</p>')
+        else:
+            chunks.append(f"    <h2>{tract_name}</h2>")
+        if shape_score != "":
+            chunks.append(f'    <p class="score">Shape similarity score: {shape_score}</p>')
+
+        # Tract views (coronal, axial, sagittal)
+        chunks.append('    <div class="section"><h4>Tract views</h4><div class="grid">')
+        if isinstance(subject_views, dict):
+            for view in ["coronal", "axial", "sagittal"]:
+                p = subject_views.get(view)
+                if p:
+                    chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="{view}" title="{view}"/></div>')
+        chunks.append("    </div></div>")
+
+        t1_views = extra.get("t1_views") if isinstance(extra, dict) else None
+        if isinstance(t1_views, dict) and t1_views:
+            chunks.append('    <div class="section"><h4>T1 alignment</h4><div class="grid">')
+            for view in ["coronal", "axial", "sagittal"]:
+                p = t1_views.get(view)
+                if p:
+                    chunks.append(
+                        f'      <div class="cell"><img src="{rel(p)}" alt="T1 {view}" title="T1 alignment {view}"/></div>',
+                    )
+            chunks.append("    </div></div>")
+
+        # Atlas views (same views for the matching atlas bundle, stored in tract folder)
+        atlas_views = extra.get("atlas_views") if isinstance(extra, dict) else None
+        if isinstance(atlas_views, dict):
+            chunks.append('    <div class="section"><h4>Atlas views</h4><div class="grid">')
+            for view in ["coronal", "axial", "sagittal"]:
+                p = atlas_views.get(view)
+                if p:
+                    chunks.append(
+                        f'      <div class="cell"><img src="{rel(p)}" alt="atlas {view}" title="Atlas {view}"/></div>',
+                    )
+            chunks.append("    </div></div>")
+
+        # CCI: histogram + before/after views
+        if isinstance(cci_plots, dict):
+            chunks.append('    <div class="section"><h4>CCI</h4>')
+            cci_stats = cci_plots.get("cci_stats") or {}
+            if (
+                cci_stats
+                and isinstance(cci_stats.get("n_long"), (int, float))
+                and isinstance(cci_stats.get("pct_retained"), (int, float))
+            ):
+                n_long = cci_stats["n_long"]
+                n_keep = cci_stats.get("n_keep", "")
+                pct = cci_stats["pct_retained"]
+                mean_cci = cci_stats.get("mean_cci", "")
+                try:
+                    mean_s = (
+                        f"; mean CCI: {float(mean_cci):.3f}"
+                        if mean_cci is not None and not np.isnan(float(mean_cci))
+                        else ""
+                    )
+                except (TypeError, ValueError):
+                    mean_s = ""
+                chunks.append(
+                    f'    <p class="score">Long streamlines: {n_long} → retained (CCI threshold): {n_keep} ({pct:.1f}%){mean_s}</p>',
+                )
+            chunks.append('<div class="grid">')
+            hist = cci_plots.get("histogram")
+            if hist:
+                chunks.append(
+                    f'      <div class="cell"><img src="{rel(hist)}" alt="CCI histogram" title="CCI histogram"/></div>',
+                )
+            for view in ["coronal", "axial", "sagittal"]:
+                pair = cci_plots.get(view)
+                if isinstance(pair, dict):
+                    for label, p in [("before", pair.get("before")), ("after", pair.get("after"))]:
+                        if p:
+                            chunks.append(
+                                f'      <div class="cell"><img src="{rel(p)}" alt="CCI {label} {view}" title="CCI {label} {view}"/></div>',
+                            )
+            chunks.append("    </div></div>")
+
+        # DKI (profile + views)
+        # if isinstance(dki_res, dict):
+        #    chunks.append('    <div class="section"><h4>DKI</h4><div class="grid">')
+        #    pp = dki_res.get("profile_plot")
+        #    if pp:
+        #        chunks.append(f'      <div class="cell"><img src="{rel(pp)}" alt="DKI profile" title="DKI profile"/></div>')
+        #    for view in ["coronal", "axial", "sagittal"]:
+        #        p = dki_res.get(view)
+        #        if p:
+        #            chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="DKI {view}" title="DKI {view}"/></div>')
+        #    chunks.append("    </div></div>")
+
+        # DTI (profile + views)
+        # if isinstance(dti_res, dict):
+        #    chunks.append('    <div class="section"><h4>DTI</h4><div class="grid">')
+        #    pp = dti_res.get("profile_plot")
+        #    if pp:
+        #        chunks.append(f'      <div class="cell"><img src="{rel(pp)}" alt="DTI profile" title="DTI profile"/></div>')
+        #    for view in ["coronal", "axial", "sagittal"]:
+        #        p = dti_res.get(view)
+        #        if p:
+        #            chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="DTI {view}" title="DTI {view}"/></div>')
+        #    chunks.append("    </div></div>")
+
+        # NODDI (profile + views)
+        # if isinstance(noddi_res, dict):
+        #    chunks.append('    <div class="section"><h4>NODDI</h4><div class="grid">')
+        #    pp = noddi_res.get("profile_plot")
+        #    if pp:
+        #        chunks.append(f'      <div class="cell"><img src="{rel(pp)}" alt="NODDI profile" title="NODDI profile"/></div>')
+        #    for view in ["coronal", "axial", "sagittal"]:
+        #        p = noddi_res.get(view)
+        #        if p:
+        #            chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="NODDI {view}" title="NODDI {view}"/></div>')
+        #    chunks.append("    </div></div>")
+
+        chunks.append("  </div>")
+
+    chunks.append("</body>\n</html>")
+
+    html = "\n".join(chunks)
+    output_html_path.write_text(html, encoding="utf-8")
+    return str(output_html_path)
+```
+
+## get_parser
+
+```
+get_parser() -> ArgumentParser
+```
+
+Return the CLI argument parser.
+
+#### Returns
+
+```
+An argparse parser.
+```
+
+Source code in `src/pytractoviz/_internal/cli.py`
+
+```
+def get_parser() -> argparse.ArgumentParser:
+    """Return the CLI argument parser.
+
+    Returns
+    -------
+        An argparse parser.
+    """
+    parser = argparse.ArgumentParser(prog="pytractoviz")
+    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {debug._get_version()}")
+    parser.add_argument("--debug-info", action=_DebugInfo, help="Print debug information.")
+
+    # Add subcommands
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    interactive_parser = subparsers.add_parser(
+        "interactive",
+        help="Interactive 3D viewer: review tracts one by one",
+        description=(
+            "Walk through tracts interactively for quality checking. "
+            "Opens each tract in a 3D viewer that you can rotate and examine. "
+            "Close the window to move to the next tract."
+        ),
+    )
+    interactive_parser.add_argument(
+        "tracts",
+        nargs="+",
+        help="Tract files (.trk) or directories containing .trk files",
+    )
+    interactive_parser.add_argument(
+        "--ref",
+        "--reference",
+        dest="ref_img",
+        required=True,
+        help="Reference T1-weighted image (required)",
+    )
+    interactive_parser.add_argument(
+        "--no-glass-brain",
+        dest="show_glass_brain",
+        action="store_false",
+        help="Disable glass brain outline",
+    )
+    interactive_parser.add_argument(
+        "--max-streamlines",
+        type=int,
+        help="Maximum number of streamlines to render (subsample if more)",
+    )
+    interactive_parser.add_argument(
+        "--subsample-factor",
+        type=float,
+        help="Fraction of streamlines to keep (0.0 to 1.0)",
+    )
+    interactive_parser.add_argument(
+        "--max-points-per-streamline",
+        type=int,
+        help="Maximum points per streamline (resample if more)",
+    )
+    interactive_parser.add_argument(
+        "--resample-streamlines",
+        action="store_true",
+        help="Resample all streamlines to reduce point count",
+    )
+    interactive_parser.add_argument(
+        "--window-size",
+        type=int,
+        nargs=2,
+        default=[800, 800],
+        metavar=("WIDTH", "HEIGHT"),
+        help="Window size in pixels (default: 800 800)",
+    )
+    interactive_parser.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        help="Number of tracts to skip at the start (default: 0)",
+    )
+
+    _add_report_subparsers(subparsers)
+
+    return parser
+```
+
+## load_qc_path_config
+
+```
+load_qc_path_config(
+    *,
+    tractography_root: str | Path | None = None,
+    atlas_dir: str | Path | None = None,
+    atlas_ref_img: str | Path | None = None,
+    qsiprep_root: str | Path | None = None,
+    qsirecon_root: str | Path | None = None,
+    qc_output_dir: str | Path | None = None,
+) -> QCPathConfig
+```
+
+Build :class:`QCPathConfig` from explicit arguments, then environment variables.
+
+Precedence: function arguments > environment variables.
+
+#### Parameters
+
+tractography_root : str or Path, optional Top-level tractography directory. Required unless `PYTRACTOVIZ_TRACTOGRAPHY_ROOT` or `TRACTOGRAPHY_ROOT` is set. atlas_dir : str or Path, optional Override atlas bundle directory. Env: `PYTRACTOVIZ_ATLAS_DIR`. atlas_ref_img : str or Path, optional Override MNI reference mask. Env: `PYTRACTOVIZ_ATLAS_REF_IMG`. qsiprep_root : str or Path, optional Root containing `qsiprep/<project>/<subject>/anat`. Env: `PYTRACTOVIZ_QSIPREP_ROOT`. qsirecon_root : str or Path, optional Root containing `qsirecon/<project>/derivatives`. Env: `PYTRACTOVIZ_QSIRECON_ROOT`. qc_output_dir : str or Path, optional Full QC output directory for a project run. Env: `PYTRACTOVIZ_QC_OUTPUT_DIR`.
+
+#### Returns
+
+QCPathConfig Resolved path configuration.
+
+#### Raises
+
+ValueError If no tractography root is provided via argument or environment.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def load_qc_path_config(
+    *,
+    tractography_root: str | Path | None = None,
+    atlas_dir: str | Path | None = None,
+    atlas_ref_img: str | Path | None = None,
+    qsiprep_root: str | Path | None = None,
+    qsirecon_root: str | Path | None = None,
+    qc_output_dir: str | Path | None = None,
+) -> QCPathConfig:
+    """Build :class:`QCPathConfig` from explicit arguments, then environment variables.
+
+    Precedence: function arguments > environment variables.
+
+    Parameters
+    ----------
+    tractography_root : str or Path, optional
+        Top-level tractography directory. Required unless
+        ``PYTRACTOVIZ_TRACTOGRAPHY_ROOT`` or ``TRACTOGRAPHY_ROOT`` is set.
+    atlas_dir : str or Path, optional
+        Override atlas bundle directory. Env: ``PYTRACTOVIZ_ATLAS_DIR``.
+    atlas_ref_img : str or Path, optional
+        Override MNI reference mask. Env: ``PYTRACTOVIZ_ATLAS_REF_IMG``.
+    qsiprep_root : str or Path, optional
+        Root containing ``qsiprep/<project>/<subject>/anat``.
+        Env: ``PYTRACTOVIZ_QSIPREP_ROOT``.
+    qsirecon_root : str or Path, optional
+        Root containing ``qsirecon/<project>/derivatives``. Env: ``PYTRACTOVIZ_QSIRECON_ROOT``.
+    qc_output_dir : str or Path, optional
+        Full QC output directory for a project run. Env: ``PYTRACTOVIZ_QC_OUTPUT_DIR``.
+
+    Returns
+    -------
+    QCPathConfig
+        Resolved path configuration.
+
+    Raises
+    ------
+    ValueError
+        If no tractography root is provided via argument or environment.
+    """
+    root = _resolve_optional_path(tractography_root) or _resolve_optional_path(_first_env(_ENV_TRACTOGRAPHY_ROOT))
+    if root is None:
+        env_names = " or ".join(f"${name}" for name in _ENV_TRACTOGRAPHY_ROOT)
+        raise ValueError(
+            "Tractography root is required. Pass tractography_root=... or set "
+            f"{env_names}, or use --tractography-root on `pytractoviz run`.",
+        )
+
+    return QCPathConfig(
+        tractography_root=root,
+        atlas_dir=_resolve_optional_path(atlas_dir) or _resolve_optional_path(_first_env(_ENV_ATLAS_DIR)),
+        atlas_ref_img=_resolve_optional_path(atlas_ref_img) or _resolve_optional_path(_first_env(_ENV_ATLAS_REF_IMG)),
+        qsiprep_root=_resolve_optional_path(qsiprep_root) or _resolve_optional_path(_first_env(_ENV_QSIPREP_ROOT)),
+        qsirecon_root=_resolve_optional_path(qsirecon_root) or _resolve_optional_path(_first_env(_ENV_QSIRECON_ROOT)),
+        qc_output_dir=_resolve_optional_path(qc_output_dir) or _resolve_optional_path(_first_env(_ENV_QC_OUTPUT_DIR)),
+    )
+```
+
+## main
+
+```
+main(args: list[str] | None = None) -> int
+```
+
+Run the main program.
+
+This function is executed when you type `pytractoviz` or `python -m pytractoviz`.
+
+#### Parameters
+
+```
+args: Arguments passed from the command line.
+```
+
+#### Returns
+
+```
+An exit code.
+```
+
+Source code in `src/pytractoviz/_internal/cli.py`
+
+```
+def main(args: list[str] | None = None) -> int:
+    """Run the main program.
+
+    This function is executed when you type `pytractoviz` or `python -m pytractoviz`.
+
+    Parameters
+    ----------
+        args: Arguments passed from the command line.
+
+    Returns
+    -------
+        An exit code.
+    """
+    parser = get_parser()
+    opts = parser.parse_args(args=args)
+
+    if opts.command == "interactive":
+        # Collect all tract files
+        tract_files = _collect_tract_files(opts.tracts)
+
+        if not tract_files:
+            print("Error: No .trk files found.", file=sys.stderr)
+            return 1
+
+        # Skip tracts if requested
+        if opts.skip > 0:
+            if opts.skip >= len(tract_files):
+                print(f"Error: Cannot skip {opts.skip} tracts (only {len(tract_files)} found)", file=sys.stderr)
+                return 1
+            tract_files = tract_files[opts.skip :]
+            print(f"Skipping first {opts.skip} tracts. Starting with: {tract_files[0].name}")
+
+        print(f"\nFound {len(tract_files)} tract file(s) to review.")
+        print("Instructions:")
+        print("  - Rotate: Click and drag with left mouse button")
+        print("  - Zoom: Scroll wheel or right-click and drag")
+        print("  - Pan: Middle-click and drag (or Shift+left-click)")
+        print("  - Close window to move to next tract")
+        print("  - Press 'q' or close window to exit current tract\n")
+
+        # Initialize visualizer
+        visualizer = TractographyVisualizer(reference_image=Path(opts.ref_img))
+
+        # Process each tract
+        for i, tract_file in enumerate(tract_files, start=1):
+            print(f"\n[{i}/{len(tract_files)}] Loading: {tract_file.name}")
+            print(f"  Full path: {tract_file}")
+
+            try:
+                visualizer.view_tract_interactive(
+                    tract_file,
+                    ref_img=opts.ref_img,
+                    show_glass_brain=opts.show_glass_brain,
+                    max_streamlines=opts.max_streamlines,
+                    subsample_factor=opts.subsample_factor,
+                    max_points_per_streamline=opts.max_points_per_streamline,
+                    resample_streamlines=opts.resample_streamlines,
+                    window_size=tuple(opts.window_size),
+                )
+                print(f"  ✓ Completed review of {tract_file.name}")
+            except KeyboardInterrupt:
+                print("\n\nInterrupted by user. Exiting.")
+                return 130
+            except (FileNotFoundError, InvalidInputError, TractographyVisualizationError) as e:
+                print(f"  ✗ Error viewing {tract_file.name}: {e}", file=sys.stderr)
+                response = input("  Continue to next tract? [Y/n]: ").strip().lower()
+                if response and response != "y":
+                    return 1
+
+        print(f"\n✓ Completed review of all {len(tract_files)} tract(s).")
+        return 0
+
+    if opts.command in _REPORT_COMMANDS:
+        return _run_report_command(opts)
+
+    # Default behavior (no command specified)
+    if opts.command is None:
+        parser.print_help()
+        return 0
+
+    return 0
+```
+
+## parse_group_spec
+
+```
+parse_group_spec(spec: str) -> tuple[str, Path]
+```
+
+Parse a group label and QC directory from a CLI `group-interactive` argument.
+
+#### Parameters
+
+spec : str Either `label=/path/to/qc` or `/path/to/qc`. When no label is given, the directory name is used as the label.
+
+#### Returns
+
+tuple[str, Path] `(label, group_dir)` pair.
+
+Source code in `src/pytractoviz/group_interactive_report.py`
+
+```
+def parse_group_spec(spec: str) -> tuple[str, Path]:
+    """Parse a group label and QC directory from a CLI ``group-interactive`` argument.
+
+    Parameters
+    ----------
+    spec : str
+        Either ``label=/path/to/qc`` or ``/path/to/qc``. When no label is given,
+        the directory name is used as the label.
+
+    Returns
+    -------
+    tuple[str, Path]
+        ``(label, group_dir)`` pair.
+    """
+    spec = spec.strip()
+    if "=" in spec:
+        label, path_str = spec.split("=", 1)
+        label = label.strip()
+        path = Path(path_str.strip())
+    else:
+        path = Path(spec)
+        label = path.name
+    if not label:
+        label = path.name
+    return label, path
+```
+
+## write_combined_group_csvs
+
+```
+write_combined_group_csvs(
+    group_qc_dir: str | Path,
+    tract_stats_rows: list[dict[str, Any]],
+    profile_values: dict[
+        tuple[str, str], dict[str, dict[int, float]]
+    ],
+) -> None
+```
+
+Write combined_tract_stats.csv and combined_profile_data.csv under group_qc_dir.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def write_combined_group_csvs(
+    group_qc_dir: str | Path,
+    tract_stats_rows: list[dict[str, Any]],
+    profile_values: dict[tuple[str, str], dict[str, dict[int, float]]],
+) -> None:
+    """Write combined_tract_stats.csv and combined_profile_data.csv under group_qc_dir."""
+    group_qc_dir = Path(group_qc_dir)
+    if tract_stats_rows:
+        try:
+            combined_path = group_qc_dir / "combined_tract_stats.csv"
+            all_keys: set[str] = set()
+            for row in tract_stats_rows:
+                all_keys.update(row.keys())
+            base_first = ["subject", "tract"]
+            other = sorted([k for k in all_keys if k not in base_first])
+            header = base_first + other
+            with open(combined_path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
+                w.writeheader()
+                for row in tract_stats_rows:
+                    out_row = {k: row.get(k, "") for k in header}
+                    w.writerow(out_row)
+        except OSError:
+            pass
+
+    if profile_values:
+        try:
+            combined_prof_path = group_qc_dir / "combined_profile_data.csv"
+            with open(combined_prof_path, "w", newline="") as f:
+                prof_writer = csv.writer(f)
+                prof_writer.writerow(["subject", "tract", "metric", "node", "value"])
+                for tract, metric in sorted(profile_values.keys(), key=lambda tm: (tm[0], tm[1])):
+                    subj_map = profile_values[(tract, metric)]
+                    for subject_id in sorted(subj_map.keys()):
+                        node_map = subj_map[subject_id]
+                        for node in sorted(node_map.keys()):
+                            val = node_map[node]
+                            try:
+                                prof_writer.writerow([subject_id, tract, metric, int(node), float(val)])
+                            except (TypeError, ValueError):
+                                continue
+        except OSError:
+            pass
+```
+
+# qc_config
+
+Path configuration for the automated QC pipeline.
+
+Classes:
+
+- **`QCPathConfig`** – Filesystem layout for pytractoviz run inputs and outputs.
+
+Functions:
+
+- **`load_qc_path_config`** – Build :class:QCPathConfig from explicit arguments, then environment variables.
+
+## QCPathConfig
+
+```
+QCPathConfig(
+    tractography_root: Path,
+    atlas_dir: Path | None = None,
+    atlas_ref_img: Path | None = None,
+    qsiprep_root: Path | None = None,
+    qsirecon_root: Path | None = None,
+    qc_output_dir: Path | None = None,
+)
+```
+
+Filesystem layout for `pytractoviz run` inputs and outputs.
+
+Paths are resolved relative to `tractography_root` unless overridden. Use :func:`load_qc_path_config` to build an instance from CLI flags or environment variables.
+
+Methods:
+
+- **`anat_dir`** – Return the qsiprep anatomical directory for one subject.
+- **`dki_dir`** – Return the qsirecon-DKI dwi directory for one subject.
+- **`noddi_dir`** – Return the qsirecon-NODDI dwi directory for one subject.
+- **`output_dir_for_project`** – Return the group QC output directory for project.
+- **`pyafq_bundles_dir`** – Return the PYAFQ bundle .trk directory for one subject.
+- **`resolve_atlas_dir`** – Return the directory containing atlas bundle .trk files.
+- **`resolve_atlas_ref_img`** – Return the MNI brain-mask NIfTI used for atlas rendering.
+
+### anat_dir
+
+```
+anat_dir(project: str, subject: str) -> Path
+```
+
+Return the qsiprep anatomical directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def anat_dir(self, project: str, subject: str) -> Path:
+    """Return the qsiprep anatomical directory for one subject."""
+    return self._qsiprep_root() / "qsiprep" / project / subject / "anat"
+```
+
+### dki_dir
+
+```
+dki_dir(project: str, subject: str) -> Path
+```
+
+Return the qsirecon-DKI `dwi` directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def dki_dir(self, project: str, subject: str) -> Path:
+    """Return the qsirecon-DKI ``dwi`` directory for one subject."""
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "qsirecon-DKI" / subject / "dwi"
+```
+
+### noddi_dir
+
+```
+noddi_dir(project: str, subject: str) -> Path
+```
+
+Return the qsirecon-NODDI `dwi` directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def noddi_dir(self, project: str, subject: str) -> Path:
+    """Return the qsirecon-NODDI ``dwi`` directory for one subject."""
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "qsirecon-NODDI" / subject / "dwi"
+```
+
+### output_dir_for_project
+
+```
+output_dir_for_project(project: str) -> Path
+```
+
+Return the group QC output directory for `project`.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def output_dir_for_project(self, project: str) -> Path:
+    """Return the group QC output directory for ``project``."""
+    if self.qc_output_dir is not None:
+        return self.qc_output_dir
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "QC"
+```
+
+### pyafq_bundles_dir
+
+```
+pyafq_bundles_dir(project: str, subject: str) -> Path
+```
+
+Return the PYAFQ bundle `.trk` directory for one subject.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def pyafq_bundles_dir(self, project: str, subject: str) -> Path:
+    """Return the PYAFQ bundle ``.trk`` directory for one subject."""
+    return self._qsirecon_root() / "qsirecon" / project / "derivatives" / "PYAFQ" / subject / "bundles"
+```
+
+### resolve_atlas_dir
+
+```
+resolve_atlas_dir() -> Path
+```
+
+Return the directory containing atlas bundle `.trk` files.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def resolve_atlas_dir(self) -> Path:
+    """Return the directory containing atlas bundle ``.trk`` files."""
+    if self.atlas_dir is not None:
+        return self.atlas_dir
+    return self.tractography_root / _DEFAULT_ATLAS_DIR
+```
+
+### resolve_atlas_ref_img
+
+```
+resolve_atlas_ref_img() -> Path
+```
+
+Return the MNI brain-mask NIfTI used for atlas rendering.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def resolve_atlas_ref_img(self) -> Path:
+    """Return the MNI brain-mask NIfTI used for atlas rendering."""
+    if self.atlas_ref_img is not None:
+        return self.atlas_ref_img
+    return self.tractography_root / _DEFAULT_ATLAS_REF_IMG
+```
+
+## load_qc_path_config
+
+```
+load_qc_path_config(
+    *,
+    tractography_root: str | Path | None = None,
+    atlas_dir: str | Path | None = None,
+    atlas_ref_img: str | Path | None = None,
+    qsiprep_root: str | Path | None = None,
+    qsirecon_root: str | Path | None = None,
+    qc_output_dir: str | Path | None = None,
+) -> QCPathConfig
+```
+
+Build :class:`QCPathConfig` from explicit arguments, then environment variables.
+
+Precedence: function arguments > environment variables.
+
+#### Parameters
+
+tractography_root : str or Path, optional Top-level tractography directory. Required unless `PYTRACTOVIZ_TRACTOGRAPHY_ROOT` or `TRACTOGRAPHY_ROOT` is set. atlas_dir : str or Path, optional Override atlas bundle directory. Env: `PYTRACTOVIZ_ATLAS_DIR`. atlas_ref_img : str or Path, optional Override MNI reference mask. Env: `PYTRACTOVIZ_ATLAS_REF_IMG`. qsiprep_root : str or Path, optional Root containing `qsiprep/<project>/<subject>/anat`. Env: `PYTRACTOVIZ_QSIPREP_ROOT`. qsirecon_root : str or Path, optional Root containing `qsirecon/<project>/derivatives`. Env: `PYTRACTOVIZ_QSIRECON_ROOT`. qc_output_dir : str or Path, optional Full QC output directory for a project run. Env: `PYTRACTOVIZ_QC_OUTPUT_DIR`.
+
+#### Returns
+
+QCPathConfig Resolved path configuration.
+
+#### Raises
+
+ValueError If no tractography root is provided via argument or environment.
+
+Source code in `src/pytractoviz/qc_config.py`
+
+```
+def load_qc_path_config(
+    *,
+    tractography_root: str | Path | None = None,
+    atlas_dir: str | Path | None = None,
+    atlas_ref_img: str | Path | None = None,
+    qsiprep_root: str | Path | None = None,
+    qsirecon_root: str | Path | None = None,
+    qc_output_dir: str | Path | None = None,
+) -> QCPathConfig:
+    """Build :class:`QCPathConfig` from explicit arguments, then environment variables.
+
+    Precedence: function arguments > environment variables.
+
+    Parameters
+    ----------
+    tractography_root : str or Path, optional
+        Top-level tractography directory. Required unless
+        ``PYTRACTOVIZ_TRACTOGRAPHY_ROOT`` or ``TRACTOGRAPHY_ROOT`` is set.
+    atlas_dir : str or Path, optional
+        Override atlas bundle directory. Env: ``PYTRACTOVIZ_ATLAS_DIR``.
+    atlas_ref_img : str or Path, optional
+        Override MNI reference mask. Env: ``PYTRACTOVIZ_ATLAS_REF_IMG``.
+    qsiprep_root : str or Path, optional
+        Root containing ``qsiprep/<project>/<subject>/anat``.
+        Env: ``PYTRACTOVIZ_QSIPREP_ROOT``.
+    qsirecon_root : str or Path, optional
+        Root containing ``qsirecon/<project>/derivatives``. Env: ``PYTRACTOVIZ_QSIRECON_ROOT``.
+    qc_output_dir : str or Path, optional
+        Full QC output directory for a project run. Env: ``PYTRACTOVIZ_QC_OUTPUT_DIR``.
+
+    Returns
+    -------
+    QCPathConfig
+        Resolved path configuration.
+
+    Raises
+    ------
+    ValueError
+        If no tractography root is provided via argument or environment.
+    """
+    root = _resolve_optional_path(tractography_root) or _resolve_optional_path(_first_env(_ENV_TRACTOGRAPHY_ROOT))
+    if root is None:
+        env_names = " or ".join(f"${name}" for name in _ENV_TRACTOGRAPHY_ROOT)
+        raise ValueError(
+            "Tractography root is required. Pass tractography_root=... or set "
+            f"{env_names}, or use --tractography-root on `pytractoviz run`.",
+        )
+
+    return QCPathConfig(
+        tractography_root=root,
+        atlas_dir=_resolve_optional_path(atlas_dir) or _resolve_optional_path(_first_env(_ENV_ATLAS_DIR)),
+        atlas_ref_img=_resolve_optional_path(atlas_ref_img) or _resolve_optional_path(_first_env(_ENV_ATLAS_REF_IMG)),
+        qsiprep_root=_resolve_optional_path(qsiprep_root) or _resolve_optional_path(_first_env(_ENV_QSIPREP_ROOT)),
+        qsirecon_root=_resolve_optional_path(qsirecon_root) or _resolve_optional_path(_first_env(_ENV_QSIRECON_ROOT)),
+        qc_output_dir=_resolve_optional_path(qc_output_dir) or _resolve_optional_path(_first_env(_ENV_QC_OUTPUT_DIR)),
+    )
+```
+
+# qc_viz
+
+Automated tractography QC pipeline: views, CCI, AFQ profiles, and HTML reports.
+
+Functions:
+
+- **`calc_bbox_size`** – Safely compute bounding-box size of a set of streamlines.
+- **`calc_cci`** – Compute cluster confidence index (CCI) and keep streamlines above threshold.
+- **`calc_centroid`** – Safely compute centroid of a set of streamlines.
+- **`calc_shape_similarity`** – Bundle shape similarity (DIPY BUAN/BA metric).
+- **`calc_shape_similarity_pair`** – Shape similarity between two subject bundles (same DIPY metric as vs-atlas).
+- **`collect_group_qc_data`** – Scan a group QC directory and aggregate per-subject outputs.
+- **`downsample_streamlines`** – Downsample streamlines with DIPY polygon approximation.
+- **`find_qc_bundle_trk`** – Locate a bundle .trk under subject_dir/tract_name/.
+- **`gen_subject_anatomy_views`** – Once-per-subject T1 slices through brain center with all bundles overlaid.
+- **`gen_t1_views`** – Render tract streamlines overlaid on orthogonal T1 slices through the bundle centroid.
+- **`gen_views`** – Render coronal, axial, and sagittal tract PNGs over a brain mask.
+- **`generate_group_summary_html`** – Generate a group summary HTML page with links to each subject's QC report.
+- **`generate_subject_qc_html`** – Generate a single HTML report for one subject from qc_data.json.
+- **`init_scene`** – Create a FURY scene with a faint brain-mask contour.
+- **`init_scene_with_t1_slice`** – Orthogonal T1 slice through centroid; streamlines in the same voxel grid.
+- **`load_tract`** – Load a tractogram and return a FURY line actor in reference voxel space.
+- **`main`** – Run the full per-subject QC pipeline and write CSV, JSON, and HTML outputs.
+- **`plot_afq`** – Render AFQ-colored tract views and a 1D profile plot for one metric.
+- **`plot_before_after_cci`** – Render CCI before/after views, histogram, and retained bundle assets.
+- **`save_subject_subject_shape_matrix_assets`** – Write a subjectxsubject shape similarity heatmap (PNG) and numeric table (CSV).
+- **`set_anat_camera`** – Position the scene camera for coronal, axial, or sagittal viewing.
+- **`subject_bundle_key`** – Extract the short bundle name from a PYAFQ or BIDS-like tract filename stem.
+- **`weighted_afq`** – Compute a weighted AFQ profile along a bundle for one scalar map.
+- **`write_cci_csv`** – Save CCI values (one per long streamline) to CSV for later use.
+- **`write_combined_group_csvs`** – Write combined_tract_stats.csv and combined_profile_data.csv under group_qc_dir.
+- **`write_profile_csv`** – Write profile data to CSV.
+- **`write_tract_stats`** – Write one row per tract: shape_score, CCI QA stats, plus mean profile for each metric.
+
+## calc_bbox_size
+
+```
+calc_bbox_size(
+    streamlines: Streamlines | None,
+) -> NDArrayFloat | None
+```
+
+Safely compute bounding-box size of a set of streamlines.
+
+Returns a 3-vector (max - min). If no points are available, returns None and callers should fall back to a default zoom.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def calc_bbox_size(streamlines: Streamlines | None) -> NDArrayFloat | None:
+    """
+    Safely compute bounding-box size of a set of streamlines.
+
+    Returns a 3-vector (max - min). If no points are available, returns None
+    and callers should fall back to a default zoom.
+    """
+    if streamlines is None or len(streamlines) == 0:
+        return None
+    all_pts = np.vstack([np.asarray(sl) for sl in streamlines if len(sl) > 0])
+    if all_pts.size == 0:
+        return None
+    return np.max(all_pts, axis=0) - np.min(all_pts, axis=0)
+```
+
+## calc_cci
+
+```
+calc_cci(
+    tract_streamlines: Streamlines,
+    ref_img_obj: Nifti1Image,
+    min_length_mm: float = 40,
+    cci_threshold: float = 1.0,
+    max_streamlines: int | None = None,
+) -> tuple[
+    NDArrayFloat,
+    NDArrayFloat,
+    StatefulTractogram,
+    Streamlines,
+    CCIStats,
+]
+```
+
+Compute cluster confidence index (CCI) and keep streamlines above threshold.
+
+CCI (dipy) measures how much support each streamline has from similar neighbors; high CCI = many nearby streamlines (likely valid), low CCI = isolated (likely outlier). We keep streamlines with CCI >= cci_threshold for QA and downstream profiles.
+
+Short streamlines (< min_length_mm) are excluded before CCI (dipy recommends removing < 20 mm; 40 mm avoids short fragments that can distort the distribution).
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def calc_cci(
+    tract_streamlines: Streamlines,
+    ref_img_obj: nib.Nifti1Image,
+    min_length_mm: float = 40,
+    cci_threshold: float = 1.0,
+    max_streamlines: int | None = None,
+) -> tuple[NDArrayFloat, NDArrayFloat, StatefulTractogram, Streamlines, CCIStats]:
+    """
+    Compute cluster confidence index (CCI) and keep streamlines above threshold.
+
+    CCI (dipy) measures how much support each streamline has from similar neighbors;
+    high CCI = many nearby streamlines (likely valid), low CCI = isolated (likely outlier).
+    We keep streamlines with CCI >= cci_threshold for QA and downstream profiles.
+
+    Short streamlines (< min_length_mm) are excluded before CCI (dipy recommends
+    removing < 20 mm; 40 mm avoids short fragments that can distort the distribution).
+    """
+    tract_streamlines = _subsample_streamlines(tract_streamlines, max_streamlines=max_streamlines, seed=17)
+    lengths = list(length(tract_streamlines))
+    long_streamlines = Streamlines()
+    for ii, sl in enumerate(tract_streamlines):
+        if lengths[ii] > min_length_mm:
+            long_streamlines.append(sl)
+
+    n_long = len(long_streamlines)
+    if n_long == 0:
+        # No sufficiently long streamlines: return empty outputs but valid structures
+        empty_arr = np.asarray([], dtype=float)
+        keep_streamlines = Streamlines()
+        keep_tract = StatefulTractogram(keep_streamlines, ref_img_obj, Space.RASMM)
+        stats = {
+            "n_long": 0,
+            "n_keep": 0,
+            "pct_retained": 0.0,
+            "mean_cci": np.nan,
+            "mean_cci_keep": np.nan,
+        }
+        return empty_arr, empty_arr, keep_tract, long_streamlines, stats
+
+    cci = np.asarray(cluster_confidence(long_streamlines), dtype=float).ravel()
+    keep_mask = cci >= cci_threshold
+
+    keep_streamlines = Streamlines()
+    for ii, sl in enumerate(long_streamlines):
+        if keep_mask[ii]:
+            keep_streamlines.append(sl)
+
+    keep_cci = cci[keep_mask]
+    keep_tract = StatefulTractogram(keep_streamlines, ref_img_obj, Space.RASMM)
+
+    n_keep = int(np.sum(keep_mask))
+    pct_retained = (100.0 * n_keep / n_long) if n_long else 0.0
+    mean_cci = float(np.mean(cci)) if n_long else np.nan
+    mean_cci_keep = float(np.mean(keep_cci)) if n_keep else np.nan
+
+    return (
+        cci,
+        keep_cci,
+        keep_tract,
+        long_streamlines,
+        {
+            "n_long": n_long,
+            "n_keep": n_keep,
+            "pct_retained": pct_retained,
+            "mean_cci": mean_cci,
+            "mean_cci_keep": mean_cci_keep,
+        },
+    )
+```
+
+## calc_centroid
+
+```
+calc_centroid(
+    streamlines: Streamlines | None,
+) -> NDArrayFloat
+```
+
+Safely compute centroid of a set of streamlines.
+
+Returns a 3-vector. If no points are available (e.g., empty bundle), returns the origin to avoid crashes in downstream camera logic.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def calc_centroid(streamlines: Streamlines | None) -> NDArrayFloat:
+    """
+    Safely compute centroid of a set of streamlines.
+
+    Returns a 3-vector. If no points are available (e.g., empty bundle),
+    returns the origin to avoid crashes in downstream camera logic.
+    """
+    if streamlines is None:
+        return np.zeros(3, dtype=float)
+    # len(Streamlines) is cheap and robust
+    if len(streamlines) == 0:
+        return np.zeros(3, dtype=float)
+    all_pts = np.vstack([np.asarray(sl) for sl in streamlines if len(sl) > 0])
+    if all_pts.size == 0:
+        return np.zeros(3, dtype=float)
+    return np.mean(all_pts, axis=0)
+```
+
+## calc_shape_similarity
+
+```
+calc_shape_similarity(
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+    threshold: float = 6,
+    nb_points: int = 20,
+    min_streamlines: int = 10,
+    max_streamlines: int | None = None,
+) -> float
+```
+
+Bundle shape similarity (DIPY BUAN/BA metric).
+
+#### Notes
+
+- Resampling to a fixed number of points improves stability of streamline-space comparisons/registration. Many DIPY bundle registration workflows assume fixed-point streamlines (often 20).
+- Very small bundles can yield unstable/degenerate scores; we return NaN to flag "insufficient data" rather than reporting an apparently meaningful 0.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def calc_shape_similarity(
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+    threshold: float = 6,
+    nb_points: int = 20,
+    min_streamlines: int = 10,
+    max_streamlines: int | None = None,
+) -> float:
+    """
+    Bundle shape similarity (DIPY BUAN/BA metric).
+
+    Notes
+    -----
+    - Resampling to a fixed number of points improves stability of streamline-space
+      comparisons/registration. Many DIPY bundle registration workflows assume
+      fixed-point streamlines (often 20).
+    - Very small bundles can yield unstable/degenerate scores; we return NaN to
+      flag "insufficient data" rather than reporting an apparently meaningful 0.
+    """
+    tract_streamlines = _streamlines_for_shape_metric(
+        tract_file,
+        max_streamlines=max_streamlines,
+        subsample_seed=31,
+        nb_points=nb_points,
+        min_streamlines=min_streamlines,
+    )
+    atlas_streamlines = _streamlines_for_shape_metric(
+        atlas_file,
+        max_streamlines=max_streamlines,
+        subsample_seed=37,
+        nb_points=nb_points,
+        min_streamlines=min_streamlines,
+    )
+    if tract_streamlines is None or atlas_streamlines is None:
+        return float("nan")
+
+    similarity_score = bundle_shape_similarity(
+        tract_streamlines,
+        atlas_streamlines,
+        rng=np.random.default_rng(),
+        clust_thr=clust_thr,
+        threshold=threshold,
+    )
+
+    return float(similarity_score)
+```
+
+## calc_shape_similarity_pair
+
+```
+calc_shape_similarity_pair(
+    tract_file_a: str | Path,
+    tract_file_b: str | Path,
+    clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+    threshold: float = 6,
+    nb_points: int = 20,
+    min_streamlines: int = 10,
+    max_streamlines: int | None = None,
+) -> float
+```
+
+Shape similarity between two subject bundles (same DIPY metric as vs-atlas).
+
+Uses the same subsample seed for both bundles so pairwise comparisons are comparable; only unordered pairs need to be computed (metric is symmetric in practice for a fixed RNG).
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def calc_shape_similarity_pair(
+    tract_file_a: str | Path,
+    tract_file_b: str | Path,
+    clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+    threshold: float = 6,
+    nb_points: int = 20,
+    min_streamlines: int = 10,
+    max_streamlines: int | None = None,
+) -> float:
+    """
+    Shape similarity between two subject bundles (same DIPY metric as vs-atlas).
+
+    Uses the same subsample seed for both bundles so pairwise comparisons are
+    comparable; only unordered pairs need to be computed (metric is symmetric in
+    practice for a fixed RNG).
+    """
+    a = _streamlines_for_shape_metric(
+        tract_file_a,
+        max_streamlines=max_streamlines,
+        subsample_seed=41,
+        nb_points=nb_points,
+        min_streamlines=min_streamlines,
+    )
+    b = _streamlines_for_shape_metric(
+        tract_file_b,
+        max_streamlines=max_streamlines,
+        subsample_seed=41,
+        nb_points=nb_points,
+        min_streamlines=min_streamlines,
+    )
+    if a is None or b is None:
+        return float("nan")
+    similarity_score = bundle_shape_similarity(
+        a,
+        b,
+        rng=np.random.default_rng(42),
+        clust_thr=clust_thr,
+        threshold=threshold,
+    )
+    return float(similarity_score)
+```
+
+## collect_group_qc_data
+
+```
+collect_group_qc_data(
+    group_qc_dir: str | Path,
+) -> GroupQcData
+```
+
+Scan a group QC directory and aggregate per-subject outputs.
+
+Returns a dict with subject_rows, suspicious_by_subject, tract_stats_rows, profile_values, tract_scores, tract_flag_stats, total_seen, total_flagged.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def collect_group_qc_data(group_qc_dir: str | Path) -> GroupQcData:
+    """
+    Scan a group QC directory and aggregate per-subject outputs.
+
+    Returns a dict with subject_rows, suspicious_by_subject, tract_stats_rows,
+    profile_values, tract_scores, tract_flag_stats, total_seen, total_flagged.
+    """
+    group_qc_dir = Path(group_qc_dir)
+    if not group_qc_dir.is_dir():
+        raise FileNotFoundError(f"Group QC directory not found: {group_qc_dir}")
+
+    subject_rows = []
+    suspicious_by_subject = {}
+    tract_stats_rows = []
+    profile_values: dict[tuple[str, str], dict[str, dict[int, float]]] = {}
+    tract_scores: dict[str, dict[str, float]] = {}
+    tract_flag_stats: dict[str, dict[str, int]] = {}
+    total_seen = 0
+    total_flagged = 0
+    for subdir in sorted(group_qc_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        qc_json = subdir / "qc_data.json"
+        qc_html = subdir / "qc_report.html"
+        tract_stats_csv = subdir / "tract_stats.csv"
+        profile_csv = subdir / "profile_data.csv"
+        report_path = None
+        if qc_html.exists() or qc_json.exists():
+            report_path = subdir.name + "/qc_report.html"
+        if report_path is None:
+            continue
+        subject_id = subdir.name
+        n_tracts = ""
+        n_suspicious = 0
+        if qc_json.exists():
+            try:
+                with open(qc_json) as f:
+                    data = json.load(f)
+                subj_key = next(iter(data.keys())) if data else subject_id
+                results = data.get(subj_key, {})
+                if isinstance(results, dict):
+                    # Count tracts with full data
+                    valid_tracts = [
+                        k
+                        for k, v in results.items()
+                        if isinstance(v, (list, tuple)) and len(v) >= _TRACT_RESULT_MIN_LEN
+                    ]
+                    n_tracts = str(len(valid_tracts))
+                    # Extract shape similarity scores for matrix
+                    for tract_name, tract_data in results.items():
+                        if not (isinstance(tract_data, (list, tuple)) and len(tract_data) >= _TRACT_RESULT_MIN_LEN):
+                            continue
+                        extra = tract_data[2]
+                        if not isinstance(extra, dict):
+                            continue
+                        # Suspicious bundle accounting
+                        flag_type = _suspicious_flag_type(extra)
+                        flagged = bool(flag_type)
+                        stats = tract_flag_stats.setdefault(tract_name, {"flagged": 0, "seen": 0})
+                        stats["seen"] += 1
+                        total_seen += 1
+                        if flagged:
+                            stats["flagged"] += 1
+                            n_suspicious += 1
+                            total_flagged += 1
+                        shape_score = extra.get("shape_score", None)
+                        parsed_shape = _optional_float(shape_score)
+                        tract_scores.setdefault(tract_name, {})[subject_id] = (
+                            np.nan if parsed_shape is None else parsed_shape
+                        )
+            except (json.JSONDecodeError, IndexError, TypeError, OSError):
+                pass
+        suspicious_by_subject[subject_id] = int(n_suspicious)
+        subject_rows.append((subject_id, n_tracts, n_suspicious, report_path))
+
+        # Parse tract_stats.csv if present (this is the primary source for group stats)
+        if tract_stats_csv.exists():
+            try:
+                with open(tract_stats_csv, newline="") as f:
+                    r = csv.DictReader(f)
+                    for row in r:
+                        if not isinstance(row, dict):
+                            continue
+                        tract = row.get("tract", "")
+                        if not tract:
+                            continue
+                        tract_stats_rows.append({"subject": subject_id, **row})
+            except OSError:
+                pass
+
+        # Parse profile_data.csv if present (node-wise values)
+        if profile_csv.exists():
+            try:
+                with open(profile_csv, newline="") as f:
+                    r = csv.DictReader(f)
+                    for row in r:
+                        if not isinstance(row, dict):
+                            continue
+                        tract = row.get("tract", "")
+                        metric = row.get("metric", "")
+                        if not tract or not metric:
+                            continue
+                        try:
+                            node = int(float(row.get("node", "")))
+                            val = float(row.get("value", ""))
+                        except (TypeError, ValueError):
+                            continue
+                        key = (tract, metric)
+                        subj_map = profile_values.setdefault(key, {})
+                        node_map = subj_map.setdefault(subject_id, {})
+                        # if duplicates exist, last one wins
+                        node_map[node] = val
+            except OSError:
+                pass
+
+    return {
+        "subject_rows": subject_rows,
+        "suspicious_by_subject": suspicious_by_subject,
+        "tract_stats_rows": tract_stats_rows,
+        "profile_values": profile_values,
+        "tract_scores": tract_scores,
+        "tract_flag_stats": tract_flag_stats,
+        "total_seen": total_seen,
+        "total_flagged": total_flagged,
+    }
+```
+
+## downsample_streamlines
+
+```
+downsample_streamlines(
+    streamlines: Streamlines, approx_pts: float = 0.25
+) -> Streamlines
+```
+
+Downsample streamlines with DIPY polygon approximation.
+
+#### Parameters
+
+streamlines : Streamlines Input streamlines in voxel or world space. approx_pts : float, optional Approximation parameter passed to :func:`dipy.tracking.distances.approx_polygon_track`.
+
+#### Returns
+
+Streamlines Downsampled streamlines.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def downsample_streamlines(streamlines: Streamlines, approx_pts: float = 0.25) -> Streamlines:
+    """Downsample streamlines with DIPY polygon approximation.
+
+    Parameters
+    ----------
+    streamlines : Streamlines
+        Input streamlines in voxel or world space.
+    approx_pts : float, optional
+        Approximation parameter passed to :func:`dipy.tracking.distances.approx_polygon_track`.
+
+    Returns
+    -------
+    Streamlines
+        Downsampled streamlines.
+    """
+    downsampled = [approx_polygon_track(s, approx_pts) for s in streamlines]
+    return Streamlines(downsampled)
+```
+
+## find_qc_bundle_trk
+
+```
+find_qc_bundle_trk(
+    subject_dir: str | Path, tract_name: str
+) -> Path | None
+```
+
+Locate a bundle .trk under `subject_dir/tract_name/`.
+
+Prefers `*_cci_keep.trk` (written by the QC pipeline) so paths match completed runs; otherwise uses any `*.trk` in that folder.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def find_qc_bundle_trk(subject_dir: str | Path, tract_name: str) -> Path | None:
+    """
+    Locate a bundle .trk under ``subject_dir/tract_name/``.
+
+    Prefers ``*_cci_keep.trk`` (written by the QC pipeline) so paths match completed
+    runs; otherwise uses any ``*.trk`` in that folder.
+    """
+    subject_dir = Path(subject_dir)
+    td = subject_dir / tract_name
+    if not td.is_dir():
+        return None
+    keep = sorted(td.glob("*_cci_keep.trk"))
+    if keep:
+        return keep[0]
+    trks = sorted(td.glob("*.trk"))
+    return trks[0] if trks else None
+```
+
+## gen_subject_anatomy_views
+
+```
+gen_subject_anatomy_views(
+    subject_files: Sequence[str | Path],
+    ref_img: str | Path,
+    t1_img: str | Path | None,
+    output_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    fig_size: tuple[int, int] = (800, 800),
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    t1_cache: T1Cache | None = None,
+    max_streamlines_per_bundle: int = 400,
+) -> ViewPathMap
+```
+
+Once-per-subject T1 slices through brain center with all bundles overlaid.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def gen_subject_anatomy_views(
+    subject_files: Sequence[str | Path],
+    ref_img: str | Path,
+    t1_img: str | Path | None,
+    output_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    fig_size: tuple[int, int] = (800, 800),
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    t1_cache: T1Cache | None = None,
+    max_streamlines_per_bundle: int = 400,
+) -> ViewPathMap:
+    """Once-per-subject T1 slices through brain center with all bundles overlaid."""
+    if not t1_img or not Path(t1_img).exists():
+        return {}
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated_views: ViewPathMap = {}
+    all_files_exist = True
+    for v in views:
+        out_img = output_dir / f"subject_anatomy_{v}.png"
+        if out_img.exists() and not overwrite:
+            generated_views[v] = str(out_img)
+        else:
+            all_files_exist = False
+
+    if all_files_exist:
+        return generated_views
+
+    ref_data = _get_ref_data(ref_img, ref_cache)
+    t1_entry = _get_t1_data(t1_img, t1_cache)
+    if not _t1_grid_matches_ref(t1_entry, ref_data):
+        logger.warning(
+            "    T1 grid %s does not match ref %s; skipping subject anatomy views",
+            t1_entry["shape"],
+            ref_data["mask_data"].shape,
+        )
+        return {}
+
+    mask_coords = np.argwhere(ref_data["mask_data"] > 0)
+    if mask_coords.size == 0:
+        centroid = np.asarray(ref_data["mask_data"].shape, dtype=float) / 2.0
+    else:
+        centroid = np.mean(mask_coords, axis=0)
+
+    bundle_streamlines = []
+    colors = _bundle_colors(len(subject_files))
+    t0 = time.perf_counter()
+    for ii, sf in enumerate(subject_files):
+        sls = _get_downsampled_rasmm_streamlines(
+            str(sf),
+            streamlines_cache,
+            max_streamlines=max_streamlines_per_bundle,
+            subsample_seed=31 + ii,
+        )
+        sls = transform_streamlines(sls, ref_data["inv_affine"])
+        if len(sls) > 0:
+            bundle_streamlines.append((sls, colors[ii]))
+    logger.debug("    subject anatomy load+transform: %.2fs", time.perf_counter() - t0)
+
+    combined = Streamlines()
+    for sls, _color in bundle_streamlines:
+        for sl in sls:
+            combined.append(sl)
+    bbox_size = calc_bbox_size(combined)
+
+    for v in views:
+        out_img = output_dir / f"subject_anatomy_{v}.png"
+        t0 = time.perf_counter()
+        scene = init_scene_with_t1_slice(t1_entry["data"], v, centroid)
+        for sls, color in bundle_streamlines:
+            scene.add(actor.line(sls, colors=color))
+        scene = set_anat_camera(
+            scene,
+            centroid,
+            v,
+            bbox_size=bbox_size,
+            template_space="ras",
+        )
+        window.record(scene=scene, out_path=str(out_img), size=fig_size)
+        generated_views[v] = str(out_img)
+        scene.clear()
+        del scene
+        gc.collect()
+        logger.debug("    subject anatomy %s: %.2fs", v, time.perf_counter() - t0)
+
+    return generated_views
+```
+
+## gen_t1_views
+
+```
+gen_t1_views(
+    tract_file: str | Path,
+    ref_img: str | Path,
+    t1_img: str | Path | None,
+    output_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    fig_size: tuple[int, int] = (800, 800),
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    t1_cache: T1Cache | None = None,
+    max_streamlines_view: int | None = None,
+) -> ViewPathMap
+```
+
+Render tract streamlines overlaid on orthogonal T1 slices through the bundle centroid.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def gen_t1_views(
+    tract_file: str | Path,
+    ref_img: str | Path,
+    t1_img: str | Path | None,
+    output_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    fig_size: tuple[int, int] = (800, 800),
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    t1_cache: T1Cache | None = None,
+    max_streamlines_view: int | None = None,
+) -> ViewPathMap:
+    """Render tract streamlines overlaid on orthogonal T1 slices through the bundle centroid."""
+    if not t1_img or not Path(t1_img).exists():
+        return {}
+
+    tract_name = Path(tract_file).stem
+    generated_views: ViewPathMap = {}
+    all_files_exist = True
+    for v in views:
+        out_img = f"{output_dir}/{tract_name}_t1_{v}.png"
+        if Path(out_img).exists() and not overwrite:
+            generated_views[v] = out_img
+        else:
+            all_files_exist = False
+
+    if all_files_exist:
+        return generated_views
+
+    ref_data = _get_ref_data(ref_img, ref_cache)
+    t1_entry = _get_t1_data(t1_img, t1_cache)
+    if not _t1_grid_matches_ref(t1_entry, ref_data):
+        logger.warning(
+            "    T1 grid %s does not match ref %s; skipping T1 views for %s",
+            t1_entry["shape"],
+            ref_data["mask_data"].shape,
+            tract_name,
+        )
+        return {}
+
+    t0 = time.perf_counter()
+    tract_streamlines = _get_downsampled_rasmm_streamlines(
+        tract_file,
+        streamlines_cache,
+        max_streamlines=max_streamlines_view,
+        subsample_seed=23,
+    )
+    tract_streamlines = transform_streamlines(tract_streamlines, ref_data["inv_affine"])
+    centroid = calc_centroid(tract_streamlines)
+    logger.debug("    T1 load+transform: %.2fs", time.perf_counter() - t0)
+
+    bbox_size = calc_bbox_size(tract_streamlines)
+    for v in views:
+        out_img = f"{output_dir}/{tract_name}_t1_{v}.png"
+        t0 = time.perf_counter()
+        scene = init_scene_with_t1_slice(t1_entry["data"], v, centroid)
+        tract_actor = actor.line(tract_streamlines)
+        scene.add(tract_actor)
+        scene = set_anat_camera(
+            scene,
+            centroid,
+            v,
+            bbox_size=bbox_size,
+            template_space="ras",
+        )
+        window.record(scene=scene, out_path=str(out_img), size=fig_size)
+        generated_views[v] = out_img
+        scene.clear()
+        del tract_actor, scene
+        gc.collect()
+        logger.debug("    T1 view %s: %.2fs", v, time.perf_counter() - t0)
+
+    del tract_streamlines
+    gc.collect()
+    return generated_views
+```
+
+## gen_views
+
+```
+gen_views(
+    tract_file: str | Path,
+    ref_img: str | Path,
+    output_dir: str | Path,
+    *,
+    atlas: bool = False,
+    overwrite: bool = False,
+    fig_size: tuple[int, int] = (800, 800),
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    max_streamlines_view: int | None = None,
+) -> ViewPathMap
+```
+
+Render coronal, axial, and sagittal tract PNGs over a brain mask.
+
+#### Parameters
+
+tract_file : str or Path Tractography `.trk` file to render. ref_img : str or Path Reference brain-mask NIfTI. output_dir : str or Path Directory for output PNG files. atlas : bool, optional If True, use MNI camera conventions and `*_atlas_*` filenames. overwrite : bool, optional Recompute views even when PNGs already exist. fig_size : tuple of int, optional Output image size in pixels. streamlines_cache : dict, optional Shared streamline cache. ref_cache : dict, optional Shared reference-image cache. max_streamlines_view : int, optional Cap on streamlines rendered per view.
+
+#### Returns
+
+dict Mapping of view name to output PNG path.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def gen_views(
+    tract_file: str | Path,
+    ref_img: str | Path,
+    output_dir: str | Path,
+    *,
+    atlas: bool = False,
+    overwrite: bool = False,
+    fig_size: tuple[int, int] = (800, 800),
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    max_streamlines_view: int | None = None,
+) -> ViewPathMap:
+    """Render coronal, axial, and sagittal tract PNGs over a brain mask.
+
+    Parameters
+    ----------
+    tract_file : str or Path
+        Tractography ``.trk`` file to render.
+    ref_img : str or Path
+        Reference brain-mask NIfTI.
+    output_dir : str or Path
+        Directory for output PNG files.
+    atlas : bool, optional
+        If True, use MNI camera conventions and ``*_atlas_*`` filenames.
+    overwrite : bool, optional
+        Recompute views even when PNGs already exist.
+    fig_size : tuple of int, optional
+        Output image size in pixels.
+    streamlines_cache : dict, optional
+        Shared streamline cache.
+    ref_cache : dict, optional
+        Shared reference-image cache.
+    max_streamlines_view : int, optional
+        Cap on streamlines rendered per view.
+
+    Returns
+    -------
+    dict
+        Mapping of view name to output PNG path.
+    """
+    template_space: TemplateSpace = "mni" if atlas or "MNI" in str(ref_img) else "ras"
+    tract_name = Path(tract_file).stem
+    generated_views: ViewPathMap = {}
+
+    all_files_exist = True
+    for v in views:
+        out_img = f"{output_dir}/{tract_name}_atlas_{v}.png" if atlas else f"{output_dir}/{tract_name}_{v}.png"
+
+        if Path(out_img).exists() and not overwrite:
+            generated_views[v] = out_img
+        else:
+            all_files_exist = False
+
+    if all_files_exist:
+        return generated_views
+
+    t0 = time.perf_counter()
+    ref_data = _get_ref_data(ref_img, ref_cache)
+    tract_streamlines = _get_downsampled_rasmm_streamlines(
+        tract_file,
+        streamlines_cache,
+        max_streamlines=max_streamlines_view,
+        subsample_seed=23,
+    )
+    tract_streamlines = transform_streamlines(tract_streamlines, ref_data["inv_affine"])
+    centroid = calc_centroid(tract_streamlines)
+    logger.debug("    load+transform+downsample: %.2fs", time.perf_counter() - t0)
+
+    for v in views:
+        out_img = f"{output_dir}/{tract_name}_atlas_{v}.png" if atlas else f"{output_dir}/{tract_name}_{v}.png"
+        t0 = time.perf_counter()
+        scene = init_scene(ref_data["mask_data"])
+        tract_actor = actor.line(tract_streamlines)
+        scene.add(tract_actor)
+        bbox_size = calc_bbox_size(tract_streamlines)
+        scene = set_anat_camera(scene, centroid, v, bbox_size, template_space)
+        window.record(scene=scene, out_path=str(out_img), size=fig_size)
+        generated_views[v] = out_img
+        scene.clear()
+        if tract_actor is not None:
+            del tract_actor
+        del scene
+        gc.collect()
+        logger.debug("    view %s: %.2fs", v, time.perf_counter() - t0)
+
+    del tract_streamlines
+    gc.collect()
+
+    return generated_views
+```
+
+## generate_group_summary_html
+
+```
+generate_group_summary_html(
+    group_qc_dir: str | Path,
+    output_html_path: str | Path | None = None,
+    *,
+    pairwise_shape: bool = True,
+    pairwise_shape_max_streamlines: int = 4000,
+    pairwise_shape_jobs: int = 1,
+) -> str
+```
+
+Generate a group summary HTML page with links to each subject's QC report.
+
+Scans group_qc_dir for subdirectories that contain qc_data.json (or qc_report.html), then builds a QC triage page: flagged-bundle summaries, shape-similarity diagnostics, and a subject index. Also writes combined CSVs and group_interactive.html for interactive tract/profile exploration (replaces static boxplots and profile ribbons).
+
+path to the parent QC directory (e.g. .../derivatives/QC) containing
+
+one subdir per subject, each with qc_data.json and qc_report.html.
+
+output_html_path: where to write the summary HTML (default: group_qc_dir/group_summary.html) pairwise_shape: if True, compute subjectxsubject shape similarity from bundle .trk files under each subject's tract subfolders: one matrix per tract (BUAN-style) plus a summary matrix averaged across tracts. pairwise_shape_max_streamlines: cap passed to pairwise shape (0 or None = no cap). pairwise_shape_jobs: parallel tract workers for pairwise shape (1 = serial). Each worker loads one tract's bundles once per subject then scores all pairs.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def generate_group_summary_html(
+    group_qc_dir: str | Path,
+    output_html_path: str | Path | None = None,
+    *,
+    pairwise_shape: bool = True,
+    pairwise_shape_max_streamlines: int = 4000,
+    pairwise_shape_jobs: int = 1,
+) -> str:
+    """
+    Generate a group summary HTML page with links to each subject's QC report.
+
+    Scans group_qc_dir for subdirectories that contain qc_data.json (or qc_report.html),
+    then builds a QC triage page: flagged-bundle summaries, shape-similarity diagnostics,
+    and a subject index. Also writes combined CSVs and group_interactive.html for
+    interactive tract/profile exploration (replaces static boxplots and profile ribbons).
+
+    group_qc_dir: path to the parent QC directory (e.g. .../derivatives/QC) containing
+                  one subdir per subject, each with qc_data.json and qc_report.html.
+    output_html_path: where to write the summary HTML (default: group_qc_dir/group_summary.html)
+    pairwise_shape: if True, compute subjectxsubject shape similarity from bundle .trk files
+                    under each subject's tract subfolders: one matrix per tract (BUAN-style)
+                    plus a summary matrix averaged across tracts.
+    pairwise_shape_max_streamlines: cap passed to pairwise shape (0 or None = no cap).
+    pairwise_shape_jobs: parallel tract workers for pairwise shape (1 = serial). Each worker
+                          loads one tract's bundles once per subject then scores all pairs.
+    """
+    group_qc_dir = Path(group_qc_dir)
+    if output_html_path is None:
+        output_html_path = group_qc_dir / "group_summary.html"
+    output_html_path = Path(output_html_path)
+
+    collected = collect_group_qc_data(group_qc_dir)
+    subject_rows = collected["subject_rows"]
+    suspicious_by_subject = collected["suspicious_by_subject"]
+    tract_stats_rows = collected["tract_stats_rows"]
+    profile_values = collected["profile_values"]
+    tract_scores = collected["tract_scores"]
+    tract_flag_stats = collected["tract_flag_stats"]
+    total_seen = collected["total_seen"]
+    total_flagged = collected["total_flagged"]
+
+    write_combined_group_csvs(group_qc_dir, tract_stats_rows, profile_values)
+
+    interactive_rel = "group_interactive.html"
+    interactive_written = False
+    try:
+        from pytractoviz.group_interactive_report import generate_group_interactive_html  # noqa: PLC0415
+
+        generate_group_interactive_html(
+            [(group_qc_dir.name, group_qc_dir)],
+            group_qc_dir / interactive_rel,
+        )
+        interactive_written = True
+    except (ImportError, OSError, ValueError, RuntimeError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        logger.warning("Could not generate group interactive report: %s", exc)
+
+    chunks = []
+    chunks.append("""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QC Group Summary</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 2rem; background: #f4f4f5; color: #27272a; }
+    h1 { color: #18181b; border-bottom: 1px solid #d4d4d8; padding-bottom: 0.5rem; }
+    h2 { color: #1e40af; }
+    table { border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 0.5rem 1rem; text-align: left; border: 1px solid #d4d4d8; }
+    th { background: #f4f4f5; color: #1e40af; }
+    tr:nth-child(even) { background: #fafafa; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .count { color: #52525b; }
+  </style>
+</head>
+<body>
+  <h1>QC Group Summary</h1>
+  <p>Subject-level QC reports. Click a subject to open their full report.</p>
+""")
+    if interactive_written:
+        chunks.append(
+            f"""  <p><a href="{interactive_rel}">Open interactive stats explorer</a> """
+            """— tract metrics, profiles, and group comparisons from combined CSV data.</p>
+""",
+        )
+
+    chunks.append(
+        """
+  <p><strong>Flagged bundles:</strong> """
+        + str(total_flagged)
+        + """ / """
+        + str(total_seen)
+        + """ evaluated bundles (shape similarity &lt; 0.2 and/or CCI retention &lt; 20%)</p>
+""",
+    )
+
+    # Bar chart: suspicious bundle counts per subject
+    if suspicious_by_subject:
+        try:
+            subj_ids = sorted(suspicious_by_subject.keys())
+            counts = [int(suspicious_by_subject[sid]) for sid in subj_ids]
+            fig, ax = plt.subplots(1, figsize=(max(8, 0.35 * len(subj_ids)), 4))
+            ax.bar(np.arange(len(subj_ids)), counts, color="#a36b3a", alpha=0.85)
+            ax.set_xticks(np.arange(len(subj_ids)))
+            ax.set_xticklabels(subj_ids, rotation=90)
+            ax.set_ylabel("Suspicious bundles (count)")
+            ax.set_title("Suspicious bundle counts per subject")
+            ax.grid(axis="y", color="#333333", linestyle="--", linewidth=0.6, alpha=0.7)
+            fig.tight_layout()
+            suspicious_path = group_qc_dir / "suspicious_counts_per_subject.png"
+            fig.savefig(suspicious_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            chunks.append(
+                """  <h2>Suspicious bundle counts</h2>
+  <p>Number of tracts flagged as suspicious per subject.</p>
+  <p><img src="suspicious_counts_per_subject.png" alt="Suspicious counts per subject" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>""",
+            )
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            logger.warning("Failed to write suspicious bundle counts chart: %s", exc)
+
+    if tract_flag_stats:
+        tract_rows = sorted(
+            tract_flag_stats.items(),
+            key=lambda kv: (
+                -(kv[1]["flagged"] / kv[1]["seen"] if kv[1]["seen"] else 0.0),
+                -kv[1]["flagged"],
+                kv[0],
+            ),
+        )
+        chunks.append("""
+  <h2>Suspicious frequency by tract</h2>
+  <p>How often each tract was flagged as suspicious across available subjects.</p>
+  <table>
+    <thead><tr><th>Tract</th><th>Flagged</th><th>Seen</th><th>Flag rate</th></tr></thead>
+    <tbody>
+""")
+        for tract_name, stats in tract_rows:
+            seen = stats["seen"]
+            flagged = stats["flagged"]
+            rate = (100.0 * flagged / seen) if seen else 0.0
+            chunks.append(
+                f'      <tr><td>{tract_name}</td><td class="count">{flagged}</td><td class="count">{seen}</td><td class="count">{rate:.1f}%</td></tr>',
+            )
+        chunks.append("""    </tbody>
+  </table>
+""")
+
+    # Shape similarity heatmap (subject vs atlas); distributions live in interactive report.
+    if tract_scores:
+        # Stable ordering for axes
+        all_tracts = sorted(tract_scores.keys())
+        all_subjects = sorted({sid for tdict in tract_scores.values() for sid in tdict})
+        if all_tracts and all_subjects:
+            mat = np.full((len(all_subjects), len(all_tracts)), np.nan, dtype=float)
+            for j, tract_name in enumerate(all_tracts):
+                scores_by_subj = tract_scores.get(tract_name, {})
+                for i, sid in enumerate(all_subjects):
+                    val = scores_by_subj.get(sid, np.nan)
+                    try:
+                        mat[i, j] = float(val)
+                    except (TypeError, ValueError):
+                        mat[i, j] = np.nan
+            # Plot heatmap; NaNs will appear as a separate color
+            fig, ax = plt.subplots(1, figsize=(max(6, 0.4 * len(all_tracts)), max(4, 0.3 * len(all_subjects))))
+            cmap = plt.get_cmap("viridis").copy()
+            cmap.set_bad(color="#444444")  # dark gray for missing
+            im = ax.imshow(mat, aspect="auto", interpolation="nearest", cmap=cmap)
+            ax.set_xticks(np.arange(len(all_tracts)))
+            ax.set_xticklabels(all_tracts, rotation=90)
+            ax.set_yticks(np.arange(len(all_subjects)))
+            ax.set_yticklabels(all_subjects)
+            ax.set_xlabel("Tract")
+            ax.set_ylabel("Subject")
+            ax.set_title("Shape similarity (subject vs atlas)")
+            cbar = fig.colorbar(im, ax=ax)
+            cbar.set_label("Shape similarity score")
+            fig.tight_layout()
+            matrix_path = group_qc_dir / "shape_similarity_matrix.png"
+            fig.savefig(matrix_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            # Add section with the generated matrix image
+            chunks.append("""  <h2>Shape similarity across subjects and tracts</h2>
+  <p>Heatmap of shape similarity scores (subject bundles vs. atlas bundles) for all subjects and tracts with available data.</p>
+  <p><img src="shape_similarity_matrix.png" alt="Shape similarity matrix" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>""")
+
+            # Subject-subject bundle shape similarity: per-tract (BUAN-style) + mean across tracts
+            if pairwise_shape and len(all_subjects) >= _MIN_PAIRWISE_SHAPE_SUBJECTS:
+                try:
+                    n_sub = len(all_subjects)
+                    pair_sum = np.zeros((n_sub, n_sub), dtype=float)
+                    pair_count = np.zeros((n_sub, n_sub), dtype=int)
+                    by_tract_dir = group_qc_dir / "shape_similarity_subject_by_tract"
+                    by_tract_dir.mkdir(parents=True, exist_ok=True)
+                    per_tract_sections = []
+
+                    tract_tasks = []
+                    for tract_name in all_tracts:
+                        paths = [find_qc_bundle_trk(group_qc_dir / sid, tract_name) for sid in all_subjects]
+                        path_strs = [str(p.resolve()) if p is not None and p.exists() else None for p in paths]
+                        tract_tasks.append(
+                            (tract_name, path_strs, pairwise_shape_max_streamlines),
+                        )
+
+                    nj = max(1, int(pairwise_shape_jobs))
+                    tract_results = []
+                    if nj <= 1:
+                        for tract_name, path_strs, msl in tract_tasks:
+                            path_list = [Path(p) if p else None for p in path_strs]
+                            cap = _normalize_streamline_cap(msl)
+                            mat_t, had_off = _compute_pairwise_shape_one_tract(
+                                path_list,
+                                n_sub,
+                                cap,
+                            )
+                            tract_results.append((tract_name, mat_t, had_off))
+                    else:
+                        mp_ctx = mp.get_context("spawn")
+                        with ProcessPoolExecutor(max_workers=nj, mp_context=mp_ctx) as ex:
+                            futures = [ex.submit(_pairwise_shape_tract_worker, t) for t in tract_tasks]
+                            for fut in as_completed(futures):
+                                tract_results.append(fut.result())
+                    tract_results.sort(key=lambda r: r[0])
+
+                    for tract_name, mat_t, had_off_diagonal in tract_results:
+                        if not had_off_diagonal:
+                            continue
+                        for ii in range(n_sub):
+                            for jj in range(ii + 1, n_sub):
+                                v = mat_t[ii, jj]
+                                if np.isfinite(v):
+                                    pair_sum[ii, jj] += float(v)
+                                    pair_sum[jj, ii] += float(v)
+                                    pair_count[ii, jj] += 1
+                                    pair_count[jj, ii] += 1
+
+                        safe = _safe_tract_filename(tract_name)
+                        stem = by_tract_dir / safe
+                        save_subject_subject_shape_matrix_assets(
+                            stem,
+                            mat_t,
+                            all_subjects,
+                            title=f"Shape similarity (pairwise): {tract_name}",
+                            cbar_label="Shape similarity",
+                        )
+                        rel_png = f"shape_similarity_subject_by_tract/{safe}.png"
+                        rel_csv = f"shape_similarity_subject_by_tract/{safe}.csv"
+                        per_tract_sections.append(
+                            (
+                                tract_name,
+                                safe,
+                                f"""  <h3 id="pairwise-tract-{safe}">{tract_name}</h3>
+  <p><img src="{rel_png}" alt="Pairwise shape similarity {tract_name}" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>
+  <p><code>{rel_csv}</code></p>""",
+                            ),
+                        )
+
+                    subj_mat = np.full((n_sub, n_sub), np.nan, dtype=float)
+                    np.fill_diagonal(subj_mat, 1.0)
+                    for ii in range(n_sub):
+                        for jj in range(n_sub):
+                            if ii == jj:
+                                continue
+                            c = pair_count[ii, jj]
+                            if c > 0:
+                                subj_mat[ii, jj] = pair_sum[ii, jj] / float(c)
+
+                    save_subject_subject_shape_matrix_assets(
+                        group_qc_dir / "shape_similarity_subject_matrix",
+                        subj_mat,
+                        all_subjects,
+                        title="Shape similarity: subject vs subject (mean across tracts)",
+                        cbar_label="Mean shape similarity",
+                    )
+
+                    intro = """  <h2>Subject-subject shape similarity</h2>
+  <p>Pairwise bundle shape similarity using DIPY <code>bundle_shape_similarity</code> (same family of scores as BUAN). Bundles are read from <code>&lt;subject&gt;/&lt;tract&gt;/</code> (preferring <code>*_cci_keep.trk</code>). The diagonal is 1. Off-diagonal cells are gray when that pair could not be compared for any tract.</p>
+  <h3>Mean across tracts</h3>
+  <p>Each off-diagonal entry averages the pairwise score over tracts where both subjects had a <code>.trk</code> file.</p>
+  <p><img src="shape_similarity_subject_matrix.png" alt="Mean subject-subject shape similarity" style="max-width: 100%; height: auto; border: 1px solid #d4d4d8; border-radius: 4px;" /></p>
+  <p><code>shape_similarity_subject_matrix.csv</code></p>"""
+
+                    if per_tract_sections:
+                        toc_items = "".join(
+                            f'    <li><a href="#pairwise-tract-{safe}">{tract_name}</a></li>\n'
+                            for tract_name, safe, _sec in per_tract_sections
+                        )
+                        per_block = (
+                            """  <h3>Per-tract pairwise matrices (BUAN-style)</h3>
+  <p>One subjectxsubject matrix per bundle—only the tract shown is used for that heatmap.</p>
+  <ul>
+"""
+                            + toc_items
+                            + """  </ul>
+"""
+                            + "\n".join(sec for _tn, _sf, sec in per_tract_sections)
+                        )
+                    else:
+                        per_block = (
+                            "  <p><em>No per-tract pairwise matrices were written "
+                            "(need bundle <code>.trk</code> files under each subject's tract folders).</em></p>"
+                        )
+
+                    chunks.append(intro + "\n" + per_block)
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    logger.warning("Failed to generate pairwise shape similarity matrices: %s", exc)
+
+    chunks.append("""
+  <h2>Subjects</h2>
+  <table>
+    <thead><tr><th>Subject</th><th>Tracts</th><th>Flagged</th><th>Report</th></tr></thead>
+    <tbody>
+""")
+    for subject_id, n_tracts, n_flagged, report_path in subject_rows:
+        link = (
+            f'      <tr><td>{subject_id}</td><td class="count">{n_tracts}</td>'
+            f'<td class="count">{n_flagged}</td>'
+            f'<td><a href="{report_path}">Open report</a></td></tr>'
+        )
+        chunks.append(link)
+
+    chunks.append("""    </tbody>
+  </table>
+""")
+
+    chunks.append("""
+</body>
+</html>""")
+
+    html = "\n".join(chunks)
+    output_html_path.write_text(html, encoding="utf-8")
+    return str(output_html_path)
+```
+
+## generate_subject_qc_html
+
+```
+generate_subject_qc_html(
+    qc_data_path: str | Path,
+    output_html_path: str | Path | None = None,
+) -> str
+```
+
+Generate a single HTML report for one subject from qc_data.json.
+
+qc_data_path: path to qc_data.json (e.g. output_dir/subject/qc_data.json) output_html_path: where to write the HTML file (default: same dir as qc_data.json, name qc_report.html)
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def generate_subject_qc_html(
+    qc_data_path: str | Path,
+    output_html_path: str | Path | None = None,
+) -> str:
+    """
+    Generate a single HTML report for one subject from qc_data.json.
+
+    qc_data_path: path to qc_data.json (e.g. output_dir/subject/qc_data.json)
+    output_html_path: where to write the HTML file (default: same dir as qc_data.json, name qc_report.html)
+    """
+    qc_data_path = Path(qc_data_path)
+    if not qc_data_path.exists():
+        raise FileNotFoundError(f"QC data not found: {qc_data_path}")
+    base_dir = qc_data_path.parent
+    if output_html_path is None:
+        output_html_path = base_dir / "qc_report.html"
+    output_html_path = Path(output_html_path)
+
+    with open(qc_data_path) as f:
+        data = json.load(f)
+
+    # Expect one subject in the file
+    subjects = list(data.keys())
+    if not subjects:
+        raise ValueError("qc_data.json has no subject keys")
+    subject_id = subjects[0]
+    results = data[subject_id]
+
+    def rel(path: str | Path | None) -> str:
+        """Path relative to report base (subject output dir) for correct img src (tract subfolders or shared atlas_views)."""
+        if not path:
+            return ""
+        p = Path(path)
+        try:
+            return str(p.relative_to(base_dir))
+        except ValueError:
+            # Path is outside base_dir (e.g. shared atlas_views); use relpath so ../atlas_views/... works
+            return os.path.relpath(str(p), str(base_dir))
+
+    # Stable tract ordering across subjects/reports.
+    preferred_order = [
+        "CCForcepsMajor",
+        "CCForcepsMinor",
+        "CCMid",
+        "MCP",
+        "CSTL",
+        "CSTR",
+        "CL",
+        "CR",
+        "AFL",
+        "AFR",
+        "IFOFL",
+        "IFOFR",
+        "UFL",
+        "UFR",
+        "FL",
+        "FR",
+    ]
+    order_index = {name: ii for ii, name in enumerate(preferred_order)}
+
+    def tract_sort_key(name: str) -> tuple[int, str]:
+        # Unknown names go after known names, then alphabetical.
+        return (order_index.get(name, len(preferred_order)), name)
+
+    def suspicious_flags(extra: Any) -> tuple[str, str]:
+        """Return suspicious-bundle flag type and reason.
+
+        flag_type is one of:
+        - "" (not flagged)
+        - "low_shape"
+        - "low_cci_retention".
+        """
+        if not isinstance(extra, dict):
+            return "", ""
+
+        shape = _optional_float(extra.get("shape_score"))
+        pct = _optional_float(extra.get("pct_retained", extra.get("cci_pct_retained")))
+
+        if shape is not None and shape < _SUSPICIOUS_SHAPE_THRESHOLD:
+            return "low_shape", f"low shape similarity ({shape:.3f} < 0.2)"
+        if pct is not None and pct < _SUSPICIOUS_CCI_RETENTION_PCT:
+            return "low_cci_retention", f"low CCI retention ({pct:.1f}% < 20%)"
+        return "", ""
+
+    chunks = []
+    chunks.append(
+        """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QC Report — """
+        + subject_id
+        + """</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 2rem; background: #f4f4f5; color: #27272a; }
+    h1 { color: #18181b; border-bottom: 1px solid #d4d4d8; padding-bottom: 0.5rem; }
+    h2 { color: #1e40af; margin-top: 2rem; }
+    h3 { color: #166534; margin-top: 1.5rem; }
+    .tract { margin-bottom: 2.5rem; padding: 1rem; border: 1px solid #d4d4d8; border-radius: 8px; background: #ffffff; }
+    .tract.suspicious { border-color: #ca8a04; box-shadow: 0 0 0 1px rgba(202, 138, 4, 0.25) inset; }
+    .section { margin: 1rem 0; }
+    .section h4 { color: #a16207; margin: 0.5rem 0; }
+    .grid { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+    .grid img { max-width: 320px; height: auto; border: 1px solid #d4d4d8; border-radius: 4px; }
+    .grid .cell { flex: 0 0 auto; }
+    .score { font-size: 1.1rem; color: #15803d; }
+    .flag { display: inline-block; margin-left: 0.5rem; padding: 0.15rem 0.45rem; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 0.8rem; vertical-align: middle; }
+    .flag-note { color: #a16207; margin-top: 0.25rem; }
+    .note { margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; border: 1px solid #d4d4d8; border-radius: 8px; background: #ffffff; color: #3f3f46; }
+    .note strong { color: #18181b; }
+    .note table { border-collapse: collapse; margin-top: 0.5rem; }
+    .note th, .note td { padding: 0.35rem 0.65rem; text-align: left; border: 1px solid #d4d4d8; }
+    .note th { background: #f4f4f5; color: #1e40af; }
+  </style>
+</head>
+<body>
+  <h1>QC Report: """
+        + subject_id
+        + """</h1>
+""",
+    )
+
+    run_info = results.get("_run_info") if isinstance(results, dict) else None
+    if isinstance(run_info, dict) and run_info:
+        chunks.append('  <div class="note">')
+        chunks.append("    <p><strong>Run settings</strong></p>")
+        chunks.append("    <table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>")
+        for k, v in run_info.items():
+            chunks.append(f"      <tr><td>{k}</td><td>{v}</td></tr>")
+        chunks.append("    </tbody></table>")
+        chunks.append("  </div>")
+
+    # Summary of flagged tracts for this subject
+    flagged_tracts = []
+    if isinstance(results, dict):
+        for tract_name in results:
+            tract_data = results.get(tract_name)
+            if not isinstance(tract_data, (list, tuple)) or len(tract_data) < _TRACT_RESULT_MIN_LEN:
+                continue
+            extra = tract_data[2]
+            flag_type, _reason = suspicious_flags(extra)
+            if flag_type:
+                flagged_tracts.append((tract_name, extra))
+
+    def _flagged_tract_summary(name: str, extra: Any) -> str:
+        score_bits = []
+        shape = _optional_float(extra.get("shape_score"))
+        if shape is not None:
+            score_bits.append(f"shape {shape:.3f}")
+        pct = _optional_float(extra.get("pct_retained", extra.get("cci_pct_retained")))
+        if pct is not None:
+            score_bits.append(f"retention {pct:.1f}%")
+        if score_bits:
+            return f"{name} ({', '.join(score_bits)})"
+        return name
+
+    if flagged_tracts:
+        flagged_tracts.sort(key=lambda kv: tract_sort_key(kv[0]))
+        tract_names = ", ".join(_flagged_tract_summary(name, extra) for name, extra in flagged_tracts)
+        chunks.append('  <div class="note">')
+        chunks.append(
+            f"    <p><strong>Flagged tracts:</strong> {len(flagged_tracts)} "
+            f"(shape similarity &lt; 0.2 and/or CCI retention &lt; 20%) — {tract_names}</p>",
+        )
+        chunks.append("  </div>")
+
+    subject_anatomy = results.get("_subject_anatomy")
+    if isinstance(subject_anatomy, dict) and subject_anatomy:
+        chunks.append('  <div class="section"><h2>Subject anatomy</h2>')
+        chunks.append("    <p>All bundles overlaid on orthogonal T1 slices through brain center.</p>")
+        chunks.append('    <div class="grid">')
+        for view in ["coronal", "axial", "sagittal"]:
+            p = subject_anatomy.get(view)
+            if p:
+                chunks.append(
+                    f'      <div class="cell"><img src="{rel(p)}" alt="anatomy {view}" title="Subject anatomy {view}"/></div>',
+                )
+        chunks.append("    </div></div>")
+
+    for tract_name in sorted(results.keys(), key=tract_sort_key):
+        tract_data = results.get(tract_name)
+        if not isinstance(tract_data, (list, tuple)) or len(tract_data) < _TRACT_RESULT_MIN_LEN:
+            continue
+        # subject_views, cci_plots, dti_res, noddi_res, extra = tract_data[0], tract_data[1], tract_data[2], tract_data[3], tract_data[4]
+        subject_views, cci_plots, extra = tract_data[0], tract_data[1], tract_data[2]
+        shape_score = extra.get("shape_score", "")
+        flag_type, suspicious_reason = suspicious_flags(extra)
+        is_suspicious = bool(flag_type)
+
+        tract_class = "tract suspicious" if is_suspicious else "tract"
+        chunks.append(f'  <div class="{tract_class}">')
+        if is_suspicious:
+            chunks.append(f'    <h2>{tract_name}<span class="flag">Suspicious</span></h2>')
+            chunks.append(f'    <p class="flag-note">Flag reason: {suspicious_reason}</p>')
+        else:
+            chunks.append(f"    <h2>{tract_name}</h2>")
+        if shape_score != "":
+            chunks.append(f'    <p class="score">Shape similarity score: {shape_score}</p>')
+
+        # Tract views (coronal, axial, sagittal)
+        chunks.append('    <div class="section"><h4>Tract views</h4><div class="grid">')
+        if isinstance(subject_views, dict):
+            for view in ["coronal", "axial", "sagittal"]:
+                p = subject_views.get(view)
+                if p:
+                    chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="{view}" title="{view}"/></div>')
+        chunks.append("    </div></div>")
+
+        t1_views = extra.get("t1_views") if isinstance(extra, dict) else None
+        if isinstance(t1_views, dict) and t1_views:
+            chunks.append('    <div class="section"><h4>T1 alignment</h4><div class="grid">')
+            for view in ["coronal", "axial", "sagittal"]:
+                p = t1_views.get(view)
+                if p:
+                    chunks.append(
+                        f'      <div class="cell"><img src="{rel(p)}" alt="T1 {view}" title="T1 alignment {view}"/></div>',
+                    )
+            chunks.append("    </div></div>")
+
+        # Atlas views (same views for the matching atlas bundle, stored in tract folder)
+        atlas_views = extra.get("atlas_views") if isinstance(extra, dict) else None
+        if isinstance(atlas_views, dict):
+            chunks.append('    <div class="section"><h4>Atlas views</h4><div class="grid">')
+            for view in ["coronal", "axial", "sagittal"]:
+                p = atlas_views.get(view)
+                if p:
+                    chunks.append(
+                        f'      <div class="cell"><img src="{rel(p)}" alt="atlas {view}" title="Atlas {view}"/></div>',
+                    )
+            chunks.append("    </div></div>")
+
+        # CCI: histogram + before/after views
+        if isinstance(cci_plots, dict):
+            chunks.append('    <div class="section"><h4>CCI</h4>')
+            cci_stats = cci_plots.get("cci_stats") or {}
+            if (
+                cci_stats
+                and isinstance(cci_stats.get("n_long"), (int, float))
+                and isinstance(cci_stats.get("pct_retained"), (int, float))
+            ):
+                n_long = cci_stats["n_long"]
+                n_keep = cci_stats.get("n_keep", "")
+                pct = cci_stats["pct_retained"]
+                mean_cci = cci_stats.get("mean_cci", "")
+                try:
+                    mean_s = (
+                        f"; mean CCI: {float(mean_cci):.3f}"
+                        if mean_cci is not None and not np.isnan(float(mean_cci))
+                        else ""
+                    )
+                except (TypeError, ValueError):
+                    mean_s = ""
+                chunks.append(
+                    f'    <p class="score">Long streamlines: {n_long} → retained (CCI threshold): {n_keep} ({pct:.1f}%){mean_s}</p>',
+                )
+            chunks.append('<div class="grid">')
+            hist = cci_plots.get("histogram")
+            if hist:
+                chunks.append(
+                    f'      <div class="cell"><img src="{rel(hist)}" alt="CCI histogram" title="CCI histogram"/></div>',
+                )
+            for view in ["coronal", "axial", "sagittal"]:
+                pair = cci_plots.get(view)
+                if isinstance(pair, dict):
+                    for label, p in [("before", pair.get("before")), ("after", pair.get("after"))]:
+                        if p:
+                            chunks.append(
+                                f'      <div class="cell"><img src="{rel(p)}" alt="CCI {label} {view}" title="CCI {label} {view}"/></div>',
+                            )
+            chunks.append("    </div></div>")
+
+        # DKI (profile + views)
+        # if isinstance(dki_res, dict):
+        #    chunks.append('    <div class="section"><h4>DKI</h4><div class="grid">')
+        #    pp = dki_res.get("profile_plot")
+        #    if pp:
+        #        chunks.append(f'      <div class="cell"><img src="{rel(pp)}" alt="DKI profile" title="DKI profile"/></div>')
+        #    for view in ["coronal", "axial", "sagittal"]:
+        #        p = dki_res.get(view)
+        #        if p:
+        #            chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="DKI {view}" title="DKI {view}"/></div>')
+        #    chunks.append("    </div></div>")
+
+        # DTI (profile + views)
+        # if isinstance(dti_res, dict):
+        #    chunks.append('    <div class="section"><h4>DTI</h4><div class="grid">')
+        #    pp = dti_res.get("profile_plot")
+        #    if pp:
+        #        chunks.append(f'      <div class="cell"><img src="{rel(pp)}" alt="DTI profile" title="DTI profile"/></div>')
+        #    for view in ["coronal", "axial", "sagittal"]:
+        #        p = dti_res.get(view)
+        #        if p:
+        #            chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="DTI {view}" title="DTI {view}"/></div>')
+        #    chunks.append("    </div></div>")
+
+        # NODDI (profile + views)
+        # if isinstance(noddi_res, dict):
+        #    chunks.append('    <div class="section"><h4>NODDI</h4><div class="grid">')
+        #    pp = noddi_res.get("profile_plot")
+        #    if pp:
+        #        chunks.append(f'      <div class="cell"><img src="{rel(pp)}" alt="NODDI profile" title="NODDI profile"/></div>')
+        #    for view in ["coronal", "axial", "sagittal"]:
+        #        p = noddi_res.get(view)
+        #        if p:
+        #            chunks.append(f'      <div class="cell"><img src="{rel(p)}" alt="NODDI {view}" title="NODDI {view}"/></div>')
+        #    chunks.append("    </div></div>")
+
+        chunks.append("  </div>")
+
+    chunks.append("</body>\n</html>")
+
+    html = "\n".join(chunks)
+    output_html_path.write_text(html, encoding="utf-8")
+    return str(output_html_path)
+```
+
+## init_scene
+
+```
+init_scene(mask_data: NDArrayFloat | str | Path) -> Any
+```
+
+Create a FURY scene with a faint brain-mask contour.
+
+#### Parameters
+
+mask_data : array-like or str or Path Brain mask volume, or path to a NIfTI mask file.
+
+#### Returns
+
+fury.window.Scene Scene ready for streamline actors.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def init_scene(mask_data: NDArrayFloat | str | Path) -> Any:
+    """Create a FURY scene with a faint brain-mask contour.
+
+    Parameters
+    ----------
+    mask_data : array-like or str or Path
+        Brain mask volume, or path to a NIfTI mask file.
+
+    Returns
+    -------
+    fury.window.Scene
+        Scene ready for streamline actors.
+    """
+    scene = window.Scene()
+    scene.SetBackground(1, 1, 1)
+    if isinstance(mask_data, (str, Path)):
+        mask_data = np.asarray(_load_nifti(str(mask_data)).get_fdata(), dtype=float)
+    brain_actor = actor.contour_from_roi(mask_data, color=[0, 0, 0], opacity=0.05)
+
+    scene.add(brain_actor)
+    del brain_actor
+    gc.collect()
+
+    return scene
+```
+
+## init_scene_with_t1_slice
+
+```
+init_scene_with_t1_slice(
+    t1_data: NDArrayFloat,
+    view: ViewName,
+    centroid_vox: NDArrayFloat,
+) -> Any
+```
+
+Orthogonal T1 slice through centroid; streamlines in the same voxel grid.
+
+Caller must apply `set_anat_camera` (same RAS convention as `gen_views`).
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def init_scene_with_t1_slice(t1_data: NDArrayFloat, view: ViewName, centroid_vox: NDArrayFloat) -> Any:
+    """Orthogonal T1 slice through centroid; streamlines in the same voxel grid.
+
+    Caller must apply ``set_anat_camera`` (same RAS convention as ``gen_views``).
+    """
+    scene = window.Scene()
+    scene.SetBackground(1, 1, 1)
+    t1_display = histeq(np.asarray(t1_data, dtype=float).copy(), num_bins=256)
+    value_range = (float(t1_display.min()), float(t1_display.max()))
+    vol_actor = actor.slicer(t1_display, value_range=value_range)
+    ix, iy, iz = _centroid_vox_indices(centroid_vox, t1_data.shape)
+    if view == "sagittal":
+        vol_actor.display(x=ix, y=None, z=None)
+    elif view == "coronal":
+        vol_actor.display(x=None, y=iy, z=None)
+    else:
+        vol_actor.display(x=None, y=None, z=iz)
+    scene.add(vol_actor)
+    return scene
+```
+
+## load_tract
+
+```
+load_tract(
+    tract_file: str | Path, ref_img: str | Path
+) -> Any
+```
+
+Load a tractogram and return a FURY line actor in reference voxel space.
+
+#### Parameters
+
+tract_file : str or Path Path to a `.trk` tractography file. ref_img : str or Path Reference NIfTI used to transform streamlines into voxel coordinates.
+
+#### Returns
+
+fury.actor.line Line actor for the tract, transformed to reference space.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def load_tract(tract_file: str | Path, ref_img: str | Path) -> Any:
+    """Load a tractogram and return a FURY line actor in reference voxel space.
+
+    Parameters
+    ----------
+    tract_file : str or Path
+        Path to a ``.trk`` tractography file.
+    ref_img : str or Path
+        Reference NIfTI used to transform streamlines into voxel coordinates.
+
+    Returns
+    -------
+    fury.actor.line
+        Line actor for the tract, transformed to reference space.
+    """
+    tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+    tract.to_rasmm()
+    ref_img_obj = _load_nifti(ref_img)
+    tract_to_ref = transform_streamlines(tract.streamlines, np.linalg.inv(ref_img_obj.affine))
+
+    return actor.line(tract_to_ref)
+```
+
+## main
+
+```
+main(
+    subject: str,
+    project: str,
+    *,
+    path_config: QCPathConfig | None = None,
+    n_jobs: int = 1,
+    render_backend: RenderBackend = "osmesa",
+    max_streamlines_view: int = 5000,
+    max_streamlines_cci: int = 5000,
+    max_streamlines_afq: int = 6000,
+    max_streamlines_shape: int = 4000,
+) -> None
+```
+
+Run the full per-subject QC pipeline and write CSV, JSON, and HTML outputs.
+
+#### Parameters
+
+subject : str Subject identifier (for example `sub-0000`). project : str Project or cohort name (for example `UNC`). path_config : QCPathConfig, optional Filesystem layout. Defaults to :func:`pytractoviz.qc_config.load_qc_path_config`. n_jobs : int, optional Number of parallel tract workers. render_backend : str, optional `"osmesa"` or `"egl"` for offscreen VTK/FURY rendering. max_streamlines_view : int, optional Cap on streamlines used for view rendering (0 = no cap). max_streamlines_cci : int, optional Cap on streamlines used for CCI (0 = no cap). max_streamlines_afq : int, optional Cap on streamlines used for AFQ profiles (0 = no cap). max_streamlines_shape : int, optional Cap on streamlines used for shape similarity (0 = no cap).
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def main(
+    subject: str,
+    project: str,
+    *,
+    path_config: QCPathConfig | None = None,
+    n_jobs: int = 1,
+    render_backend: RenderBackend = "osmesa",
+    max_streamlines_view: int = 5000,
+    max_streamlines_cci: int = 5000,
+    max_streamlines_afq: int = 6000,
+    max_streamlines_shape: int = 4000,
+) -> None:
+    """Run the full per-subject QC pipeline and write CSV, JSON, and HTML outputs.
+
+    Parameters
+    ----------
+    subject : str
+        Subject identifier (for example ``sub-0000``).
+    project : str
+        Project or cohort name (for example ``UNC``).
+    path_config : QCPathConfig, optional
+        Filesystem layout. Defaults to :func:`pytractoviz.qc_config.load_qc_path_config`.
+    n_jobs : int, optional
+        Number of parallel tract workers.
+    render_backend : str, optional
+        ``"osmesa"`` or ``"egl"`` for offscreen VTK/FURY rendering.
+    max_streamlines_view : int, optional
+        Cap on streamlines used for view rendering (0 = no cap).
+    max_streamlines_cci : int, optional
+        Cap on streamlines used for CCI (0 = no cap).
+    max_streamlines_afq : int, optional
+        Cap on streamlines used for AFQ profiles (0 = no cap).
+    max_streamlines_shape : int, optional
+        Cap on streamlines used for shape similarity (0 = no cap).
+    """
+    _configure_qc_logging()
+    cap_view = _normalize_streamline_cap(max_streamlines_view)
+    cap_cci = _normalize_streamline_cap(max_streamlines_cci)
+    cap_afq = _normalize_streamline_cap(max_streamlines_afq)
+    cap_shape = _normalize_streamline_cap(max_streamlines_shape)
+
+    os.environ.setdefault("VTK_STREAM_READER", "1")
+    os.environ.setdefault("VTK_STREAM_WRITER", "1")
+    os.environ.setdefault("VTK_USE_OFFSCREEN", "1")
+    if str(render_backend).lower() == "osmesa":
+        os.environ.setdefault("VTK_USE_OSMESA", "1")
+    else:
+        os.environ.pop("VTK_USE_OSMESA", None)
+
+    paths = path_config or load_qc_path_config()
+    atlas_dir = paths.resolve_atlas_dir()
+    atlas_ref_img = str(paths.resolve_atlas_ref_img())
+    output_dir = str(paths.output_dir_for_project(project))
+    atlas_views_dir = f"{output_dir}/atlas_views"
+    Path(atlas_views_dir).mkdir(parents=True, exist_ok=True)
+
+    anat_dir = paths.anat_dir(project, subject)
+    dki_dir = paths.dki_dir(project, subject)
+    noddi_dir = paths.noddi_dir(project, subject)
+
+    subj_ref_img = str(anat_dir / f"{subject}_space-ACPC_desc-brain_mask.nii.gz")
+    subj_t1_img = _resolve_t1_path(anat_dir, subject)
+    if subj_t1_img:
+        logger.info(">> Using T1 for anatomy overlays: %s", subj_t1_img)
+    else:
+        logger.warning(">> No T1 found under %s; T1 alignment views will be skipped", anat_dir)
+
+    atlas_files = list(atlas_dir.glob("*trk"))
+    subject_files = list(paths.pyafq_bundles_dir(project, subject).glob("*trk"))
+    # dki_file = "acq-multiband_dir-AP_space-ACPC_model-dki_param"
+    # dki_file_list = [
+    #    f"{dki_dir}/{subject}_{dki_file}-ad_dwimap.nii.gz",
+    #    f"{dki_dir}/{subject}_{dki_file}-rd_dwimap.nii.gz",
+    #    f"{dki_dir}/{subject}_{dki_file}-kfa_dwimap.nii.gz",
+    #    f"{dki_dir}/{subject}_{dki_file}-md_dwimap.nii.gz",
+    #    f"{dki_dir}/{subject}_{dki_file}-mk_dwimap.nii.gz"
+    # ]
+    dti_file = "acq-multiband_dir-AP_space-ACPC_model"
+    dti_file_list = [str(dki_dir / f"{subject}_{dti_file}-tensor_param-fa_dwimap.nii.gz")]
+    noddi_file = "acq-multiband_dir-AP_space-ACPC_model-noddi_param"
+    noddi_file_list = [
+        str(noddi_dir / f"{subject}_{noddi_file}-icvf_dwimap.nii.gz"),
+        str(noddi_dir / f"{subject}_{noddi_file}-isovf_dwimap.nii.gz"),
+        str(noddi_dir / f"{subject}_{noddi_file}-od_dwimap.nii.gz"),
+        str(noddi_dir / f"{subject}_{noddi_file}-icvf_desc-modulated_dwimap.nii.gz"),
+        str(noddi_dir / f"{subject}_{noddi_file}-od_desc-modulated_dwimap.nii.gz"),
+    ]
+
+    results: SubjectResults = {}
+    subject_results: dict[str, SubjectResults] = {}
+    profile_rows = []
+
+    atlas_by_stem = {af.stem: af for af in atlas_files}
+    # Pre-generate atlas views once in main process to avoid write races.
+    atlas_views_by_stem: dict[str, ViewPathMap] = {}
+    atlas_stream_cache: StreamlineCache = {}
+    atlas_ref_cache: RefCache = {}
+    for atlas_stem_name, atlas_bundle_file in atlas_by_stem.items():
+        logger.info(">> Generating atlas views for %s...", atlas_stem_name)
+        atlas_views_by_stem[atlas_stem_name] = gen_views(
+            str(atlas_bundle_file),
+            atlas_ref_img,
+            atlas=True,
+            output_dir=atlas_views_dir,
+            streamlines_cache=atlas_stream_cache,
+            ref_cache=atlas_ref_cache,
+            max_streamlines_view=cap_view,
+        )
+
+    speed = {
+        "max_streamlines_view": cap_view,
+        "max_streamlines_cci": cap_cci,
+        "max_streamlines_afq": cap_afq,
+        "max_streamlines_shape": cap_shape,
+    }
+
+    tasks = []
+    for sf in subject_files:
+        tract_name = subject_bundle_key(sf.stem)
+        mapped_atlas_stem = SUBJECT_TO_ATLAS.get(tract_name)
+        if mapped_atlas_stem is None:
+            raise ValueError(
+                f"No atlas mapping defined for subject bundle '{tract_name}'. "
+                f"Expected one of: {sorted(SUBJECT_TO_ATLAS.keys())}",
+            )
+        atlas_bundle_path = atlas_by_stem.get(mapped_atlas_stem)
+        if atlas_bundle_path is None:
+            raise ValueError(
+                f"Atlas file with stem '{mapped_atlas_stem}' not found. Available atlas stems: {sorted(atlas_by_stem.keys())}",
+            )
+        tasks.append(
+            (
+                str(sf),
+                subject,
+                output_dir,
+                subj_ref_img,
+                subj_t1_img,
+                str(atlas_bundle_path),
+                atlas_ref_img,
+                atlas_views_by_stem.get(mapped_atlas_stem, {}),
+                dti_file_list,
+                noddi_file_list,
+                speed,
+            ),
+        )
+
+    if n_jobs <= 1:
+        for task in tasks:
+            tract_name, tract_result, tract_profiles = _process_subject_tract(task)
+            results[tract_name] = tract_result
+            profile_rows.extend(tract_profiles)
+    else:
+        logger.info(">> Parallel mode enabled with %d workers (spawn)", n_jobs)
+        mp_ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=n_jobs, mp_context=mp_ctx) as ex:
+            futures = [ex.submit(_process_subject_tract, task) for task in tasks]
+            for fut in as_completed(futures):
+                tract_name, tract_result, tract_profiles = fut.result()
+                results[tract_name] = tract_result
+                profile_rows.extend(tract_profiles)
+
+    subj_out_dir = f"{output_dir}/{subject}"
+    if subj_t1_img:
+        t0 = time.perf_counter()
+        logger.info(">> Generating subject-level anatomy views...")
+        anatomy_cache: T1Cache = {}
+        ref_cache: RefCache = {}
+        streamlines_cache: StreamlineCache = {}
+        results["_subject_anatomy"] = gen_subject_anatomy_views(
+            subject_files,
+            subj_ref_img,
+            subj_t1_img,
+            subj_out_dir,
+            streamlines_cache=streamlines_cache,
+            ref_cache=ref_cache,
+            t1_cache=anatomy_cache,
+        )
+        logger.info("   [subject anatomy: %.2fs]", time.perf_counter() - t0)
+
+    # Record run settings in output (visible in HTML if present).
+    results["_run_info"] = {
+        "jobs": int(n_jobs),
+        "render_backend": str(render_backend),
+        "max_streamlines_view": _cap_for_run_info(cap_view),
+        "max_streamlines_cci": _cap_for_run_info(cap_cci),
+        "max_streamlines_afq": _cap_for_run_info(cap_afq),
+        "max_streamlines_shape": _cap_for_run_info(cap_shape),
+        "t1_img": subj_t1_img or "",
+    }
+
+    subject_results[subject] = results
+    logger.info(">> Saving results...")
+    Path(subj_out_dir).mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+    profile_csv_path = f"{subj_out_dir}/profile_data.csv"
+    write_profile_csv(profile_rows, profile_csv_path)
+    stats_csv_path = f"{subj_out_dir}/tract_stats.csv"
+    write_tract_stats(results, profile_rows, stats_csv_path)
+    qc_data_path = f"{subj_out_dir}/qc_data.json"
+    with open(qc_data_path, "w") as f:
+        json.dump(subject_results, f, indent=4)
+    logger.info("   CSV + JSON: %.2fs", time.perf_counter() - t0)
+    logger.info("   Profile CSV written to %s", profile_csv_path)
+    logger.info("   Tract stats written to %s", stats_csv_path)
+    t0 = time.perf_counter()
+    html_path = generate_subject_qc_html(qc_data_path)
+    logger.info("   HTML report: %.2fs", time.perf_counter() - t0)
+    logger.info("   Report written to %s", html_path)
+```
+
+## plot_afq
+
+```
+plot_afq(
+    profile: NDArrayFloat,
+    _metric_file: str | Path,
+    metric_str: str,
+    tract_file: str | Path,
+    _atlas_file: str | Path,
+    ref_img: str | Path,
+    output_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    colormap: str = "Spectral",
+) -> AfqViewMap | tuple[AfqViewMap, NDArrayFloat]
+```
+
+Render AFQ-colored tract views and a 1D profile plot for one metric.
+
+#### Parameters
+
+profile : array-like Length-100 AFQ profile used to color streamlines and plot the ribbon. metric_file : str or Path Scalar map NIfTI path (used for metadata only after profile computation). metric_str : str Short metric label used in filenames and plot titles. tract_file : str or Path Subject bundle `.trk` file. atlas_file : str or Path Atlas bundle used for orientation (metadata). ref_img : str or Path Reference brain-mask NIfTI. output_dir : str or Path Directory for profile plot and view PNGs. overwrite : bool, optional Recompute outputs even when files already exist. colormap : str, optional Matplotlib/FURY colormap name for streamline coloring.
+
+#### Returns
+
+dict Mapping of view names and `profile_plot` to output paths.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def plot_afq(
+    profile: NDArrayFloat,
+    _metric_file: str | Path,
+    metric_str: str,
+    tract_file: str | Path,
+    _atlas_file: str | Path,
+    ref_img: str | Path,
+    output_dir: str | Path,
+    *,
+    overwrite: bool = False,
+    colormap: str = "Spectral",
+) -> AfqViewMap | tuple[AfqViewMap, NDArrayFloat]:
+    """Render AFQ-colored tract views and a 1D profile plot for one metric.
+
+    Parameters
+    ----------
+    profile : array-like
+        Length-100 AFQ profile used to color streamlines and plot the ribbon.
+    metric_file : str or Path
+        Scalar map NIfTI path (used for metadata only after profile computation).
+    metric_str : str
+        Short metric label used in filenames and plot titles.
+    tract_file : str or Path
+        Subject bundle ``.trk`` file.
+    atlas_file : str or Path
+        Atlas bundle used for orientation (metadata).
+    ref_img : str or Path
+        Reference brain-mask NIfTI.
+    output_dir : str or Path
+        Directory for profile plot and view PNGs.
+    overwrite : bool, optional
+        Recompute outputs even when files already exist.
+    colormap : str, optional
+        Matplotlib/FURY colormap name for streamline coloring.
+
+    Returns
+    -------
+    dict
+        Mapping of view names and ``profile_plot`` to output paths.
+    """
+    t0 = time.perf_counter()
+    template_space: TemplateSpace = "mni" if "MNI" in str(ref_img) else "ras"
+    tract_name = Path(tract_file).stem
+    generated_views: AfqViewMap = {}
+    profile_plot_path = f"{output_dir}/{tract_name}_{metric_str}_profile.png"
+    generated_views["profile_plot"] = profile_plot_path
+
+    all_view_files_exist = True
+    for v in views:
+        out_img = f"{output_dir}/{tract_name}_{metric_str}_{v}.png"
+        if Path(out_img).exists() and not overwrite:
+            generated_views[v] = out_img
+        else:
+            all_view_files_exist = False
+
+    if all_view_files_exist and Path(profile_plot_path).exists() and not overwrite:
+        return generated_views, profile
+
+    t0 = time.perf_counter()
+    tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+    tract.to_rasmm()
+    ref_img_obj = _load_nifti(ref_img)
+    tract_streamlines = transform_streamlines(tract.streamlines, np.linalg.inv(ref_img_obj.affine))
+    tract_streamlines = downsample_streamlines(tract_streamlines)
+    streamline_point_colors = []
+    for sl in tract_streamlines:
+        sl_array = np.array(sl)
+        interpolated_vals = np.interp(np.linspace(0, 1, len(sl_array)), np.linspace(0, 1, len(profile)), profile)
+        point_colors = create_colormap(interpolated_vals, name=colormap)
+        streamline_point_colors.append(point_colors)
+    centroid = calc_centroid(tract_streamlines)
+    logger.debug("      load+colormap: %.2fs", time.perf_counter() - t0)
+
+    for v in views:
+        out_img = f"{output_dir}/{tract_name}_{metric_str}_{v}.png"
+        t0 = time.perf_counter()
+        scene = init_scene(ref_img)
+        for _ii, (sl, point_colors) in enumerate(zip(tract_streamlines, streamline_point_colors)):
+            line_actor = actor.line([sl], colors=point_colors)
+            scene.add(line_actor)
+        bbox_size = calc_bbox_size(tract_streamlines)
+        scene = set_anat_camera(scene, centroid, v, bbox_size=bbox_size, template_space=template_space)
+        window.record(scene=scene, out_path=str(out_img), size=(800, 800))
+        generated_views[v] = out_img
+        scene.clear()
+        del scene
+        gc.collect()
+        logger.debug("      %s view %s: %.2fs", metric_str, v, time.perf_counter() - t0)
+
+    if not Path(profile_plot_path).exists() or overwrite:
+        t0 = time.perf_counter()
+        fig, ax = plt.subplots(1, figsize=(8, 6))
+        ax.plot(profile)
+        ax.set_xlabel("Node along tract")
+        ax.set_ylabel(metric_str)
+        ax.set_title(f"AFQ Profile: {metric_str}")
+        ax.grid(visible=True, alpha=0.3)
+        fig.savefig(str(profile_plot_path), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.debug("      profile plot: %.2fs", time.perf_counter() - t0)
+
+    return generated_views
+```
+
+## plot_before_after_cci
+
+```
+plot_before_after_cci(
+    tract_file: str | Path,
+    ref_img: str | Path,
+    output_dir: str | Path,
+    *,
+    fig_size: tuple[int, int] = (800, 800),
+    n_hist_bins: int = 100,
+    overwrite: bool = False,
+    cci_threshold: float = 1.0,
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    max_streamlines_cci: int | None = None,
+) -> CciViewDict
+```
+
+Render CCI before/after views, histogram, and retained bundle assets.
+
+Computes cluster confidence indices, writes `*_cci.csv` and `*_cci_keep.trk`, and saves coronal/axial/sagittal before/after PNGs.
+
+#### Parameters
+
+tract_file : str or Path Subject bundle `.trk` file. ref_img : str or Path Reference brain-mask NIfTI. output_dir : str or Path Directory for CCI PNGs, CSV, and retained tractogram. fig_size : tuple of int, optional Output image size in pixels. n_hist_bins : int, optional Number of histogram bins for the CCI plot. overwrite : bool, optional Recompute outputs even when files already exist. cci_threshold : float, optional Minimum CCI for streamlines retained in the `*_cci_keep` tract. streamlines_cache : dict, optional Shared streamline cache for repeated loads. ref_cache : dict, optional Shared reference-image cache. max_streamlines_cci : int, optional Cap on streamlines used for CCI.
+
+#### Returns
+
+dict Paths to generated assets plus `cci_stats` when available.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def plot_before_after_cci(
+    tract_file: str | Path,
+    ref_img: str | Path,
+    output_dir: str | Path,
+    *,
+    fig_size: tuple[int, int] = (800, 800),
+    n_hist_bins: int = 100,
+    overwrite: bool = False,
+    cci_threshold: float = 1.0,
+    streamlines_cache: StreamlineCache | None = None,
+    ref_cache: RefCache | None = None,
+    max_streamlines_cci: int | None = None,
+) -> CciViewDict:
+    """Render CCI before/after views, histogram, and retained bundle assets.
+
+    Computes cluster confidence indices, writes ``*_cci.csv`` and
+    ``*_cci_keep.trk``, and saves coronal/axial/sagittal before/after PNGs.
+
+    Parameters
+    ----------
+    tract_file : str or Path
+        Subject bundle ``.trk`` file.
+    ref_img : str or Path
+        Reference brain-mask NIfTI.
+    output_dir : str or Path
+        Directory for CCI PNGs, CSV, and retained tractogram.
+    fig_size : tuple of int, optional
+        Output image size in pixels.
+    n_hist_bins : int, optional
+        Number of histogram bins for the CCI plot.
+    overwrite : bool, optional
+        Recompute outputs even when files already exist.
+    cci_threshold : float, optional
+        Minimum CCI for streamlines retained in the ``*_cci_keep`` tract.
+    streamlines_cache : dict, optional
+        Shared streamline cache for repeated loads.
+    ref_cache : dict, optional
+        Shared reference-image cache.
+    max_streamlines_cci : int, optional
+        Cap on streamlines used for CCI.
+
+    Returns
+    -------
+    dict
+        Paths to generated assets plus ``cci_stats`` when available.
+    """
+    tract_name = Path(tract_file).stem
+    hist_path = f"{output_dir}/{tract_name}_cci_histogram.png"
+    cci_csv_path = Path(output_dir) / f"{tract_name}_cci.csv"
+    generated_views: CciViewDict = {}
+
+    all_files_exist = True
+    if not Path(hist_path).exists() or overwrite:
+        all_files_exist = False
+    else:
+        generated_views["histogram"] = hist_path
+
+    for v in views:
+        out_before = f"{output_dir}/cci_before_{tract_name}_{v}.png"
+        out_after = f"{output_dir}/cci_after_{tract_name}_{v}.png"
+        if Path(out_before).exists() and Path(out_after).exists() and not overwrite:
+            generated_views[v] = {"before": out_before, "after": out_after}
+        else:
+            all_files_exist = False
+
+    keep_tract_path = Path(output_dir) / f"{tract_name}_cci_keep.trk"
+    if all_files_exist:
+        if cci_csv_path.exists():
+            try:
+                cci_vals = []
+                with open(cci_csv_path, newline="") as f:
+                    r = csv.DictReader(f)
+                    for row in r:
+                        try:
+                            cci_vals.append(float(row.get("cci", "")))
+                        except (TypeError, ValueError):
+                            continue
+                cci_arr = np.asarray(cci_vals, dtype=float)
+                if cci_arr.size > 0:
+                    keep_mask = cci_arr >= float(cci_threshold)
+                    keep_vals = cci_arr[keep_mask]
+                    n_long = int(cci_arr.size)
+                    n_keep = int(np.sum(keep_mask))
+                    generated_views["cci_stats"] = {
+                        "n_long": n_long,
+                        "n_keep": n_keep,
+                        "pct_retained": (100.0 * n_keep / n_long) if n_long else 0.0,
+                        "mean_cci": float(np.mean(cci_arr)) if n_long else np.nan,
+                        "mean_cci_keep": float(np.mean(keep_vals)) if n_keep else np.nan,
+                    }
+                    generated_views["cci_data"] = str(cci_csv_path)
+            except (OSError, csv.Error, ValueError, TypeError) as exc:
+                logger.warning(
+                    "Failed to reconstruct CCI stats from %s; using image-only outputs: %s",
+                    cci_csv_path,
+                    exc,
+                )
+        if keep_tract_path.exists():
+            generated_views["keep_tract"] = str(keep_tract_path)
+        return generated_views
+
+    ref_data = _get_ref_data(ref_img, ref_cache)
+    tract_streamlines = _get_downsampled_rasmm_streamlines(
+        tract_file,
+        streamlines_cache,
+        max_streamlines=max_streamlines_cci,
+        subsample_seed=17,
+    )
+
+    t0 = time.perf_counter()
+    cci, _keep_cci, keep_tract, long_streamlines, cci_stats = calc_cci(
+        tract_streamlines,
+        ref_img_obj=cast("nib.Nifti1Image", ref_data["img"]),
+        cci_threshold=cci_threshold,
+        max_streamlines=None,
+    )
+    logger.debug("    calc_cci: %.2fs", time.perf_counter() - t0)
+    generated_views["cci_stats"] = cci_stats
+
+    cci_csv_path_written = write_cci_csv(tract_name, cci, output_dir)
+    generated_views["cci_data"] = cci_csv_path_written
+
+    keep_tract_path = Path(output_dir) / f"{tract_name}_cci_keep.trk"
+    save_trk(keep_tract, str(keep_tract_path), bbox_valid_check=False)
+    generated_views["keep_tract"] = str(keep_tract_path)
+
+    inv_affine = ref_data["inv_affine"]
+
+    if not Path(hist_path).exists() or overwrite:
+        t0 = time.perf_counter()
+        _save_cci_histogram(cci, hist_path, n_hist_bins=n_hist_bins)
+        logger.debug("    CCI histogram: %.2fs", time.perf_counter() - t0)
+
+    generated_views["histogram"] = hist_path
+
+    # If there are no long streamlines or no retained streamlines, skip
+    # 3D before/after visualizations to avoid centroid/colormap errors.
+    if len(long_streamlines) == 0 or len(keep_tract.streamlines) == 0 or len(cci) == 0:
+        logger.warning("    No valid streamlines for CCI before/after views; skipping 3D plots.")
+        return generated_views
+
+    before_streamlines = transform_streamlines(long_streamlines, inv_affine)
+    after_streamlines = transform_streamlines(keep_tract.streamlines, inv_affine)
+    cci_before = np.asarray(cci, dtype=np.float64)
+    cci_min = float(np.min(cci))
+    cci_max = float(np.max(cci))
+    hue = [0.5, 1]
+    saturation = [0.0, 1.0]
+    lut_cmap = actor.colormap_lookup_table(
+        scale_range=(cci_min, cci_max / 4),
+        hue_range=hue,
+        saturation_range=saturation,
+    )
+    bar = actor.scalar_bar(lookup_table=lut_cmap)
+    before_centroid = calc_centroid(before_streamlines)
+    after_centroid = calc_centroid(after_streamlines)
+
+    for v in views:
+        out_before = f"{output_dir}/cci_before_{tract_name}_{v}.png"
+        out_after = f"{output_dir}/cci_after_{tract_name}_{v}.png"
+
+        t0 = time.perf_counter()
+        scene_before = init_scene(ref_data["mask_data"])
+        scene_before.add(bar)
+        before_actor = actor.line(before_streamlines, colors=cci_before, lookup_colormap=lut_cmap)
+        scene_before.add(before_actor)
+        bbox_size_before = calc_bbox_size(before_streamlines)
+        scene_before = set_anat_camera(
+            scene_before,
+            before_centroid,
+            v,
+            bbox_size=bbox_size_before,
+            template_space="ras",
+        )
+        window.record(scene_before, out_path=str(out_before), size=fig_size)
+        scene_before.clear()
+        del before_actor, scene_before
+        gc.collect()
+        logger.debug("    CCI before %s: %.2fs", v, time.perf_counter() - t0)
+
+        t0 = time.perf_counter()
+        scene_after = init_scene(ref_data["mask_data"])
+        after_actor = actor.line(after_streamlines)
+        scene_after.add(after_actor)
+        bbox_size_after = calc_bbox_size(after_streamlines)
+        scene_after = set_anat_camera(scene_after, after_centroid, v, bbox_size=bbox_size_after, template_space="ras")
+        window.record(scene_after, out_path=str(out_after), size=fig_size)
+        scene_after.clear()
+        del scene_after, after_actor
+        gc.collect()
+        logger.debug("    CCI after %s: %.2fs", v, time.perf_counter() - t0)
+
+        generated_views[v] = {"before": out_before, "after": out_after}
+
+    return generated_views
+```
+
+## save_subject_subject_shape_matrix_assets
+
+```
+save_subject_subject_shape_matrix_assets(
+    base_path: str | Path,
+    matrix: NDArrayFloat,
+    subject_labels: Sequence[str],
+    title: str,
+    cbar_label: str = "Shape similarity",
+) -> None
+```
+
+Write a subjectxsubject shape similarity heatmap (PNG) and numeric table (CSV).
+
+`base_path` is without extension (e.g. .../shape_similarity_subject_matrix).
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def save_subject_subject_shape_matrix_assets(
+    base_path: str | Path,
+    matrix: NDArrayFloat,
+    subject_labels: Sequence[str],
+    title: str,
+    cbar_label: str = "Shape similarity",
+) -> None:
+    """
+    Write a subjectxsubject shape similarity heatmap (PNG) and numeric table (CSV).
+
+    ``base_path`` is without extension (e.g. .../shape_similarity_subject_matrix).
+    """
+    base_path = Path(base_path)
+    png_path = base_path.with_suffix(".png")
+    csv_path = base_path.with_suffix(".csv")
+    n_sub = len(subject_labels)
+    fig, ax = plt.subplots(
+        1,
+        figsize=(max(5, 0.35 * n_sub), max(4, 0.35 * n_sub)),
+    )
+    cmap = plt.get_cmap("magma").copy()
+    cmap.set_bad(color="#444444")
+    im = ax.imshow(
+        matrix,
+        aspect="equal",
+        interpolation="nearest",
+        cmap=cmap,
+        vmin=0.0,
+        vmax=1.0,
+    )
+    ax.set_xticks(np.arange(n_sub))
+    ax.set_yticks(np.arange(n_sub))
+    ax.set_xticklabels(subject_labels, rotation=90, fontsize=8)
+    ax.set_yticklabels(subject_labels, fontsize=8)
+    ax.set_xlabel("Subject")
+    ax.set_ylabel("Subject")
+    ax.set_title(title)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label(cbar_label)
+    fig.tight_layout()
+    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["", *list(subject_labels)])
+        for i, row in enumerate(np.asarray(matrix).tolist()):
+            w.writerow(
+                [subject_labels[i]]
+                + [f"{v:.6g}" if v is not None and not (isinstance(v, float) and np.isnan(v)) else "" for v in row],
+            )
+```
+
+## set_anat_camera
+
+```
+set_anat_camera(
+    scene: Any,
+    centroid: NDArrayFloat,
+    view_name: ViewName,
+    bbox_size: NDArrayFloat | None,
+    template_space: TemplateSpace,
+) -> Any
+```
+
+Position the scene camera for coronal, axial, or sagittal viewing.
+
+#### Parameters
+
+scene : fury.window.Scene Scene to configure. centroid : array-like 3D focal point in the same space as the displayed anatomy. view_name : str One of `"coronal"`, `"axial"`, or `"sagittal"`. bbox_size : array-like or None Streamline bounding-box extent used to set camera distance. template_space : str `"mni"` or `"ras"`; controls camera handedness conventions.
+
+#### Returns
+
+fury.window.Scene The same scene with an updated camera.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def set_anat_camera(
+    scene: Any,
+    centroid: NDArrayFloat,
+    view_name: ViewName,
+    bbox_size: NDArrayFloat | None,
+    template_space: TemplateSpace,
+) -> Any:
+    """Position the scene camera for coronal, axial, or sagittal viewing.
+
+    Parameters
+    ----------
+    scene : fury.window.Scene
+        Scene to configure.
+    centroid : array-like
+        3D focal point in the same space as the displayed anatomy.
+    view_name : str
+        One of ``"coronal"``, ``"axial"``, or ``"sagittal"``.
+    bbox_size : array-like or None
+        Streamline bounding-box extent used to set camera distance.
+    template_space : str
+        ``"mni"`` or ``"ras"``; controls camera handedness conventions.
+
+    Returns
+    -------
+    fury.window.Scene
+        The same scene with an updated camera.
+    """
+    max_dim = np.max(bbox_size) if bbox_size is not None else 100.0
+    camera_distance = max_dim * 2.5
+    use_mni = template_space == "mni"
+
+    if view_name == "coronal":
+        if use_mni:
+            camera_position = centroid + np.array([0, camera_distance, 0])  # From anterior (+Y)
+        else:
+            camera_position = centroid + np.array([0, -camera_distance, 0])  # From posterior (-Y)
+        view_up = np.array([0, 0, 1])  # Superior is up
+    elif view_name == "axial":
+        if use_mni:
+            camera_position = centroid + np.array([0, 0, camera_distance])  # From inferior (+Z)
+            view_up = np.array([0, 1, 0])  # Anterior as up
+        else:
+            camera_position = centroid + np.array([0, 0, camera_distance])  # From superior (+Z)
+            view_up = np.array([0, -1, 0])  # Posterior as up (flips left/right)
+    else:  # sagittal
+        if use_mni:
+            camera_position = centroid + np.array([camera_distance, 0, 0])  # From right (+X)
+        else:
+            camera_position = centroid + np.array([-camera_distance, 0, 0])  # From left (-X)
+        view_up = np.array([0, 0, 1])  # Superior is up
+
+    # Set camera
+    scene.set_camera(
+        position=camera_position,
+        focal_point=centroid,
+        view_up=view_up,
+    )
+
+    return scene
+```
+
+## subject_bundle_key
+
+```
+subject_bundle_key(stem: str) -> str
+```
+
+Extract the short bundle name from a PYAFQ or BIDS-like tract filename stem.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def subject_bundle_key(stem: str) -> str:
+    """Extract the short bundle name from a PYAFQ or BIDS-like tract filename stem."""
+    s = str(stem)
+    if "desc-" not in s:
+        return s.split("_")[-1] if "_" in s else s
+    after_desc = s.split("desc-", 1)[1]
+    if "_tractography" in after_desc:
+        after_desc = after_desc.split("_tractography")[0].rstrip("_")
+    else:
+        after_desc = after_desc.split("_")[0]
+    return after_desc
+```
+
+## weighted_afq
+
+```
+weighted_afq(
+    tract_streamlines: Streamlines,
+    standard_tract: Any,
+    metric_file: str | Path,
+    metric_cache: MetricCache,
+    max_streamlines: int | None = None,
+) -> NDArrayFloat
+```
+
+Compute a weighted AFQ profile along a bundle for one scalar map.
+
+#### Parameters
+
+tract_streamlines : Streamlines Subject bundle streamlines in RASMM space. standard_tract : Streamlines Atlas reference streamline used for orientation. metric_file : str or Path Scalar map NIfTI (for example FA or NODDI ICVF). metric_cache : dict Mutable cache of loaded metric volumes. max_streamlines : int, optional Optional cap on streamlines used for the profile.
+
+#### Returns
+
+numpy.ndarray Length-100 profile along the bundle, or NaNs when the bundle is empty.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def weighted_afq(
+    tract_streamlines: Streamlines,
+    standard_tract: Any,
+    metric_file: str | Path,
+    metric_cache: MetricCache,
+    max_streamlines: int | None = None,
+) -> NDArrayFloat:
+    """Compute a weighted AFQ profile along a bundle for one scalar map.
+
+    Parameters
+    ----------
+    tract_streamlines : Streamlines
+        Subject bundle streamlines in RASMM space.
+    standard_tract : Streamlines
+        Atlas reference streamline used for orientation.
+    metric_file : str or Path
+        Scalar map NIfTI (for example FA or NODDI ICVF).
+    metric_cache : dict
+        Mutable cache of loaded metric volumes.
+    max_streamlines : int, optional
+        Optional cap on streamlines used for the profile.
+
+    Returns
+    -------
+    numpy.ndarray
+        Length-100 profile along the bundle, or NaNs when the bundle is empty.
+    """
+    metric_img, metric_data = _get_metric_data(metric_file, metric_cache)
+    # Keep profile length consistent with AFQ defaults and downstream CSV logic.
+    n_nodes = 100
+    if tract_streamlines is None or len(tract_streamlines) == 0:
+        return np.full(n_nodes, np.nan, dtype=float)
+    tract_streamlines = _subsample_streamlines(tract_streamlines, max_streamlines=max_streamlines, seed=11)
+
+    oriented_tract = orient_by_streamline(tract_streamlines, standard_tract)
+    if oriented_tract is None or len(oriented_tract) == 0:
+        return np.full(n_nodes, np.nan, dtype=float)
+
+    # dipy's gaussian_weights can fail for very small/degenerate bundles (e.g., one
+    # streamline after CCI filtering). In those cases, fall back to unweighted AFQ.
+    w_tract = None
+    if len(oriented_tract) >= _MIN_STREAMLINES_FOR_GAUSSIAN_WEIGHTS:
+        try:
+            w_tract = gaussian_weights(oriented_tract)
+        except (ValueError, RuntimeError, TypeError) as exc:
+            logger.debug("gaussian_weights failed, using unweighted AFQ: %s", exc)
+            w_tract = None
+
+    try:
+        profile = afq_profile(
+            metric_data,
+            oriented_tract,
+            affine=metric_img.affine,
+            weights=w_tract,
+        )
+    except (ValueError, RuntimeError, TypeError, IndexError) as exc:
+        logger.debug("afq_profile failed for %s: %s", metric_file, exc)
+        profile = np.full(n_nodes, np.nan, dtype=float)
+
+    return profile
+```
+
+## write_cci_csv
+
+```
+write_cci_csv(
+    tract_name: str,
+    cci: NDArrayFloat,
+    output_dir: str | Path,
+) -> str
+```
+
+Save CCI values (one per long streamline) to CSV for later use.
+
+CSV columns: tract, streamline_index, cci.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def write_cci_csv(tract_name: str, cci: NDArrayFloat, output_dir: str | Path) -> str:
+    """Save CCI values (one per long streamline) to CSV for later use.
+
+    CSV columns: tract, streamline_index, cci.
+    """
+    output_dir = Path(output_dir)
+    csv_path = output_dir / f"{tract_name}_cci.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["tract", "streamline_index", "cci"])
+        for idx, val in enumerate(np.asarray(cci)):
+            w.writerow([tract_name, idx, float(val)])
+    return str(csv_path)
+```
+
+## write_combined_group_csvs
+
+```
+write_combined_group_csvs(
+    group_qc_dir: str | Path,
+    tract_stats_rows: list[dict[str, Any]],
+    profile_values: dict[
+        tuple[str, str], dict[str, dict[int, float]]
+    ],
+) -> None
+```
+
+Write combined_tract_stats.csv and combined_profile_data.csv under group_qc_dir.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def write_combined_group_csvs(
+    group_qc_dir: str | Path,
+    tract_stats_rows: list[dict[str, Any]],
+    profile_values: dict[tuple[str, str], dict[str, dict[int, float]]],
+) -> None:
+    """Write combined_tract_stats.csv and combined_profile_data.csv under group_qc_dir."""
+    group_qc_dir = Path(group_qc_dir)
+    if tract_stats_rows:
+        try:
+            combined_path = group_qc_dir / "combined_tract_stats.csv"
+            all_keys: set[str] = set()
+            for row in tract_stats_rows:
+                all_keys.update(row.keys())
+            base_first = ["subject", "tract"]
+            other = sorted([k for k in all_keys if k not in base_first])
+            header = base_first + other
+            with open(combined_path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
+                w.writeheader()
+                for row in tract_stats_rows:
+                    out_row = {k: row.get(k, "") for k in header}
+                    w.writerow(out_row)
+        except OSError:
+            pass
+
+    if profile_values:
+        try:
+            combined_prof_path = group_qc_dir / "combined_profile_data.csv"
+            with open(combined_prof_path, "w", newline="") as f:
+                prof_writer = csv.writer(f)
+                prof_writer.writerow(["subject", "tract", "metric", "node", "value"])
+                for tract, metric in sorted(profile_values.keys(), key=lambda tm: (tm[0], tm[1])):
+                    subj_map = profile_values[(tract, metric)]
+                    for subject_id in sorted(subj_map.keys()):
+                        node_map = subj_map[subject_id]
+                        for node in sorted(node_map.keys()):
+                            val = node_map[node]
+                            try:
+                                prof_writer.writerow([subject_id, tract, metric, int(node), float(val)])
+                            except (TypeError, ValueError):
+                                continue
+        except OSError:
+            pass
+```
+
+## write_profile_csv
+
+```
+write_profile_csv(
+    profiles_rows: Sequence[ProfileRow],
+    csv_path: str | Path,
+) -> None
+```
+
+Write profile data to CSV.
+
+profiles_rows: list of (tract, metric, profile_array). CSV columns: tract, metric, node, value.
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def write_profile_csv(profiles_rows: Sequence[ProfileRow], csv_path: str | Path) -> None:
+    """Write profile data to CSV.
+
+    profiles_rows: list of (tract, metric, profile_array).
+    CSV columns: tract, metric, node, value.
+    """
+    csv_path = Path(csv_path)
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["tract", "metric", "node", "value"])
+        for tract, metric, profile_values in profiles_rows:
+            profile_arr = np.asarray(profile_values)
+            for node, val in enumerate(profile_arr):
+                w.writerow([tract, metric, node, float(val)])
+```
+
+## write_tract_stats
+
+```
+write_tract_stats(
+    results: Mapping[str, Any],
+    profile_rows: Sequence[ProfileRow],
+    output_path: str | Path,
+) -> None
+```
+
+Write one row per tract: shape_score, CCI QA stats, plus mean profile for each metric.
+
+results: dict tract_name -> [..., extra] with extra["shape_score"], extra["n_long"], etc. profile_rows: list of (tract, metric, profile_array). CSV columns: tract, shape_score, cci_n_long, cci_n_keep, cci_pct_retained, cci_mean, mean\_, ...
+
+Source code in `src/pytractoviz/qc_viz.py`
+
+```
+def write_tract_stats(
+    results: Mapping[str, Any],
+    profile_rows: Sequence[ProfileRow],
+    output_path: str | Path,
+) -> None:
+    """Write one row per tract: shape_score, CCI QA stats, plus mean profile for each metric.
+
+    results: dict tract_name -> [..., extra] with extra["shape_score"], extra["n_long"], etc.
+    profile_rows: list of (tract, metric, profile_array).
+    CSV columns: tract, shape_score, cci_n_long, cci_n_keep, cci_pct_retained, cci_mean, mean_<metric>, ...
+    """
+    output_path = Path(output_path)
+    means = {}
+    for tract, metric, profile in profile_rows:
+        key = (tract, metric)
+        means[key] = float(np.mean(np.asarray(profile)))
+    metrics_sorted = sorted({m for (_, m) in means})
+    cci_cols = ["cci_n_long", "cci_n_keep", "cci_pct_retained", "cci_mean"]
+    header = ["tract", "shape_score"] + cci_cols + [f"mean_{m}" for m in metrics_sorted]
+    with open(output_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for tract_name in results:
+            if str(tract_name).startswith("_"):
+                continue
+            tract_data = results[tract_name]
+            extra = tract_data[-1] if isinstance(tract_data, (list, tuple)) and len(tract_data) > 0 else {}
+            if not isinstance(extra, dict):
+                extra = {}
+            shape_score = extra.get("shape_score", "")
+            if shape_score != "" and shape_score is not None:
+                shape_score = float(shape_score)
+            row = [tract_name, shape_score]
+            for col in cci_cols:
+                val = extra.get(col, "")
+                if val != "" and val is not None and not (isinstance(val, float) and np.isnan(val)):
+                    if col in {"cci_pct_retained", "cci_mean"}:
+                        val = float(val)
+                    elif col in ("cci_n_long", "cci_n_keep"):
+                        val = int(val)
+                row.append(val)
+            for m in metrics_sorted:
+                row.append(means.get((tract_name, m), ""))
+            w.writerow(row)
+```
+
+# group_interactive_report
+
+Interactive group QC report from combined_tract_stats.csv and combined_profile_data.csv.
+
+Supports one or more groups for side-by-side comparison. Uses Plotly.js (CDN) for interactive plots in a self-contained HTML file — no extra Python dependencies.
+
+Functions:
+
+- **`generate_group_interactive_html`** – Build an interactive HTML report from one or more group QC directories.
+- **`load_group_combined_data`** – Load combined tract stats and profile rows for one group.
+- **`parse_group_spec`** – Parse a group label and QC directory from a CLI group-interactive argument.
+
+## generate_group_interactive_html
+
+```
+generate_group_interactive_html(
+    group_specs: list[tuple[str, Path]],
+    output_html_path: Path | None = None,
+    *,
+    refresh_csv: bool = False,
+) -> str
+```
+
+Build an interactive HTML report from one or more group QC directories.
+
+The output is a self-contained HTML file using Plotly.js (CDN) for interactive tract stats, heatmaps, and profile ribbon plots.
+
+#### Parameters
+
+group_specs : list of (str, Path) `(label, group_dir)` pairs. Labels must be unique. output_html_path : Path, optional Destination HTML path. Defaults to `group_dir/group_interactive.html` for a single group, or `group_interactive_comparison.html` in the first group directory when multiple groups are provided. refresh_csv : bool, optional If True, rescan subject subdirs and rewrite combined CSVs before loading.
+
+#### Returns
+
+str Path to the written HTML file.
+
+#### Raises
+
+ValueError If no groups are provided, labels are duplicated, or no data is found.
+
+Source code in `src/pytractoviz/group_interactive_report.py`
+
+```
+def generate_group_interactive_html(
+    group_specs: list[tuple[str, Path]],
+    output_html_path: Path | None = None,
+    *,
+    refresh_csv: bool = False,
+) -> str:
+    """
+    Build an interactive HTML report from one or more group QC directories.
+
+    The output is a self-contained HTML file using Plotly.js (CDN) for
+    interactive tract stats, heatmaps, and profile ribbon plots.
+
+    Parameters
+    ----------
+    group_specs : list of (str, Path)
+        ``(label, group_dir)`` pairs. Labels must be unique.
+    output_html_path : Path, optional
+        Destination HTML path. Defaults to ``group_dir/group_interactive.html``
+        for a single group, or ``group_interactive_comparison.html`` in the
+        first group directory when multiple groups are provided.
+    refresh_csv : bool, optional
+        If True, rescan subject subdirs and rewrite combined CSVs before loading.
+
+    Returns
+    -------
+    str
+        Path to the written HTML file.
+
+    Raises
+    ------
+    ValueError
+        If no groups are provided, labels are duplicated, or no data is found.
+    """
+    if not group_specs:
+        raise ValueError("At least one group must be provided")
+
+    labels = [label for label, _ in group_specs]
+    if len(labels) != len(set(labels)):
+        raise ValueError("Group labels must be unique")
+
+    all_tract_rows: list[dict] = []
+    all_profile_rows: list[dict] = []
+    for label, group_dir_raw in group_specs:
+        group_dir = Path(group_dir_raw)
+        tract_rows, profile_rows = load_group_combined_data(
+            group_dir,
+            label,
+            refresh_csv=refresh_csv,
+        )
+        all_tract_rows.extend(tract_rows)
+        all_profile_rows.extend(profile_rows)
+
+    if not all_tract_rows and not all_profile_rows:
+        raise ValueError("No combined tract stats or profile data found for any group")
+
+    profile_rows_for_ribbon = _filter_profile_rows(all_profile_rows)
+
+    groups = [label for label, _ in group_specs]
+    tracts = sorted({r["tract"] for r in all_tract_rows})
+    profile_tracts = sorted({r["tract"] for r in profile_rows_for_ribbon})
+    profile_metrics = sorted({r["metric"] for r in profile_rows_for_ribbon})
+    numeric_columns = _numeric_columns_from_rows(all_tract_rows)
+    overview = _group_overview(all_tract_rows, all_profile_rows)
+    profile_summaries = _summarize_profiles(profile_rows_for_ribbon)
+
+    payload = {
+        "groups": groups,
+        "overview": overview,
+        "tract_stats": all_tract_rows,
+        "numeric_columns": numeric_columns,
+        "tracts": tracts,
+        "profile_tracts": profile_tracts,
+        "profile_metrics": profile_metrics,
+        "profile_summaries": profile_summaries,
+    }
+
+    if output_html_path is None:
+        if len(group_specs) == 1:
+            output_html_path = Path(group_specs[0][1]) / "group_interactive.html"
+        else:
+            output_html_path = Path(group_specs[0][1]) / "group_interactive_comparison.html"
+    output_html_path = Path(output_html_path)
+    output_html_path.parent.mkdir(parents=True, exist_ok=True)
+
+    data_json = json.dumps(payload, separators=(",", ":"))
+    html = _INTERACTIVE_HTML_TEMPLATE.replace("__DATA_JSON__", data_json)
+    output_html_path.write_text(html, encoding="utf-8")
+    return str(output_html_path)
+```
+
+## load_group_combined_data
+
+```
+load_group_combined_data(
+    group_dir: Path,
+    group_label: str | None = None,
+    *,
+    refresh_csv: bool = False,
+) -> tuple[list[dict], list[dict]]
+```
+
+Load combined tract stats and profile rows for one group.
+
+Reads `combined_tract_stats.csv` and `combined_profile_data.csv` when present; otherwise scans subject subdirectories and writes those CSVs.
+
+#### Parameters
+
+group_dir : Path Group QC directory containing one subdirectory per subject. group_label : str, optional Label used in output rows. Defaults to `group_dir.name`. refresh_csv : bool, optional If True, rescan subject subdirs and rewrite combined CSVs before loading.
+
+#### Returns
+
+tuple\[list[dict], list[dict]\] `(tract_rows, profile_rows)` with a `group` column on each row.
+
+Source code in `src/pytractoviz/group_interactive_report.py`
+
+```
+def load_group_combined_data(
+    group_dir: Path,
+    group_label: str | None = None,
+    *,
+    refresh_csv: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Load combined tract stats and profile rows for one group.
+
+    Reads ``combined_tract_stats.csv`` and ``combined_profile_data.csv`` when
+    present; otherwise scans subject subdirectories and writes those CSVs.
+
+    Parameters
+    ----------
+    group_dir : Path
+        Group QC directory containing one subdirectory per subject.
+    group_label : str, optional
+        Label used in output rows. Defaults to ``group_dir.name``.
+    refresh_csv : bool, optional
+        If True, rescan subject subdirs and rewrite combined CSVs before loading.
+
+    Returns
+    -------
+    tuple[list[dict], list[dict]]
+        ``(tract_rows, profile_rows)`` with a ``group`` column on each row.
+    """
+    group_dir = Path(group_dir)
+    label = group_label or group_dir.name
+    tract_csv = group_dir / "combined_tract_stats.csv"
+    profile_csv = group_dir / "combined_profile_data.csv"
+
+    if refresh_csv or not tract_csv.exists() or not profile_csv.exists():
+        collect_group_qc_data, write_combined_group_csvs = _qc_viz_collect_write()
+        collected = collect_group_qc_data(group_dir)
+        write_combined_group_csvs(
+            group_dir,
+            collected["tract_stats_rows"],
+            collected["profile_values"],
+        )
+        tract_rows = [{"group": label, **row} for row in collected["tract_stats_rows"]]
+        profile_rows = _profile_values_to_rows(collected["profile_values"], label)
+        return tract_rows, profile_rows
+
+    tract_rows = _load_tract_stats_csv(tract_csv, label) if tract_csv.exists() else []
+    profile_rows = _load_profile_csv(profile_csv, label) if profile_csv.exists() else []
+
+    if not tract_rows and not profile_rows:
+        collect_group_qc_data, write_combined_group_csvs = _qc_viz_collect_write()
+        collected = collect_group_qc_data(group_dir)
+        write_combined_group_csvs(
+            group_dir,
+            collected["tract_stats_rows"],
+            collected["profile_values"],
+        )
+        tract_rows = [{"group": label, **row} for row in collected["tract_stats_rows"]]
+        profile_rows = _profile_values_to_rows(collected["profile_values"], label)
+
+    return tract_rows, profile_rows
+```
+
+## parse_group_spec
+
+```
+parse_group_spec(spec: str) -> tuple[str, Path]
+```
+
+Parse a group label and QC directory from a CLI `group-interactive` argument.
+
+#### Parameters
+
+spec : str Either `label=/path/to/qc` or `/path/to/qc`. When no label is given, the directory name is used as the label.
+
+#### Returns
+
+tuple[str, Path] `(label, group_dir)` pair.
+
+Source code in `src/pytractoviz/group_interactive_report.py`
+
+```
+def parse_group_spec(spec: str) -> tuple[str, Path]:
+    """Parse a group label and QC directory from a CLI ``group-interactive`` argument.
+
+    Parameters
+    ----------
+    spec : str
+        Either ``label=/path/to/qc`` or ``/path/to/qc``. When no label is given,
+        the directory name is used as the label.
+
+    Returns
+    -------
+    tuple[str, Path]
+        ``(label, group_dir)`` pair.
+    """
+    spec = spec.strip()
+    if "=" in spec:
+        label, path_str = spec.split("=", 1)
+        label = label.strip()
+        path = Path(path_str.strip())
+    else:
+        path = Path(spec)
+        label = path.name
+    if not label:
+        label = path.name
+    return label, path
+```
+
+# utils
+
+Utility functions for tractography visualization.
+
+Functions:
+
+- **`calculate_bbox_size`** – Calculate bounding box size of streamlines.
+- **`calculate_centroid`** – Calculate the centroid of streamlines.
+- **`calculate_combined_bbox_size`** – Calculate bounding box size of multiple groups of streamlines combined.
+- **`calculate_combined_centroid`** – Calculate the centroid of multiple groups of streamlines combined.
+- **`calculate_direction_colors`** – Calculate colors for streamlines based on their diffusion direction.
+- **`infer_template_space_from_paths`** – Infer template space (camera convention) from file path(s).
+- **`set_anatomical_camera`** – Set camera position for standard anatomical views.
+
+## calculate_bbox_size
+
+```
+calculate_bbox_size(streamlines: Streamlines) -> ndarray
+```
+
+Calculate bounding box size of streamlines.
+
+#### Parameters
+
+streamlines : Streamlines The streamlines to calculate bbox for.
+
+#### Returns
+
+np.ndarray The bounding box size (3D).
+
+#### Raises
+
+ValueError If streamlines is empty (raises numpy's concatenation error).
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def calculate_bbox_size(streamlines: Streamlines) -> np.ndarray:
+    """Calculate bounding box size of streamlines.
+
+    Parameters
+    ----------
+    streamlines : Streamlines
+        The streamlines to calculate bbox for.
+
+    Returns
+    -------
+    np.ndarray
+        The bounding box size (3D).
+
+    Raises
+    ------
+    ValueError
+        If streamlines is empty (raises numpy's concatenation error).
+    """
+    # Let numpy raise the original error if empty - this matches test expectations
+    all_points = np.vstack([np.array(sl) for sl in streamlines])
+    return np.max(all_points, axis=0) - np.min(all_points, axis=0)
+```
+
+## calculate_centroid
+
+```
+calculate_centroid(streamlines: Streamlines) -> ndarray
+```
+
+Calculate the centroid of streamlines.
+
+#### Parameters
+
+streamlines : Streamlines The streamlines to calculate centroid for.
+
+#### Returns
+
+np.ndarray The centroid coordinates (3D).
+
+#### Raises
+
+ValueError If streamlines is empty (raises numpy's concatenation error).
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def calculate_centroid(streamlines: Streamlines) -> np.ndarray:
+    """Calculate the centroid of streamlines.
+
+    Parameters
+    ----------
+    streamlines : Streamlines
+        The streamlines to calculate centroid for.
+
+    Returns
+    -------
+    np.ndarray
+        The centroid coordinates (3D).
+
+    Raises
+    ------
+    ValueError
+        If streamlines is empty (raises numpy's concatenation error).
+    """
+    # Let numpy raise the original error if empty - this matches test expectations
+    all_points = np.vstack([np.array(sl) for sl in streamlines])
+    return np.mean(all_points, axis=0)
+```
+
+## calculate_combined_bbox_size
+
+```
+calculate_combined_bbox_size(
+    *streamlines_groups: Streamlines,
+) -> ndarray
+```
+
+Calculate bounding box size of multiple groups of streamlines combined.
+
+#### Parameters
+
+\*streamlines_groups : Streamlines One or more Streamlines objects to combine.
+
+#### Returns
+
+np.ndarray The combined bounding box size (3D).
+
+#### Raises
+
+ValueError If any streamlines group is empty (raises numpy's concatenation error).
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def calculate_combined_bbox_size(*streamlines_groups: Streamlines) -> np.ndarray:
+    """Calculate bounding box size of multiple groups of streamlines combined.
+
+    Parameters
+    ----------
+    *streamlines_groups : Streamlines
+        One or more Streamlines objects to combine.
+
+    Returns
+    -------
+    np.ndarray
+        The combined bounding box size (3D).
+
+    Raises
+    ------
+    ValueError
+        If any streamlines group is empty (raises numpy's concatenation error).
+    """
+    # Let numpy raise the original error if any group is empty - this matches test expectations
+    all_points_list = []
+    for streamlines in streamlines_groups:
+        all_points_list.append(np.vstack([np.array(sl) for sl in streamlines]))
+    all_points = np.vstack(all_points_list)
+    return np.max(all_points, axis=0) - np.min(all_points, axis=0)
+```
+
+## calculate_combined_centroid
+
+```
+calculate_combined_centroid(
+    *streamlines_groups: Streamlines,
+) -> ndarray
+```
+
+Calculate the centroid of multiple groups of streamlines combined.
+
+#### Parameters
+
+\*streamlines_groups : Streamlines One or more Streamlines objects to combine.
+
+#### Returns
+
+np.ndarray The combined centroid coordinates (3D).
+
+#### Raises
+
+ValueError If any streamlines group is empty (raises numpy's concatenation error).
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def calculate_combined_centroid(*streamlines_groups: Streamlines) -> np.ndarray:
+    """Calculate the centroid of multiple groups of streamlines combined.
+
+    Parameters
+    ----------
+    *streamlines_groups : Streamlines
+        One or more Streamlines objects to combine.
+
+    Returns
+    -------
+    np.ndarray
+        The combined centroid coordinates (3D).
+
+    Raises
+    ------
+    ValueError
+        If any streamlines group is empty (raises numpy's concatenation error).
+    """
+    # Let numpy raise the original error if any group is empty - this matches test expectations
+    all_points_list = []
+    for streamlines in streamlines_groups:
+        all_points_list.append(np.vstack([np.array(sl) for sl in streamlines]))
+    all_points = np.vstack(all_points_list)
+    return np.mean(all_points, axis=0)
+```
+
+## calculate_direction_colors
+
+```
+calculate_direction_colors(
+    streamlines: Streamlines,
+) -> ndarray
+```
+
+Calculate colors for streamlines based on their diffusion direction.
+
+Standard RGB mapping:
+
+- Red = X-axis (left/right)
+- Green = Y-axis (anterior/posterior)
+- Blue = Z-axis (superior/inferior)
+
+#### Parameters
+
+streamlines : Streamlines The streamlines to calculate colors for.
+
+#### Returns
+
+np.ndarray Array of RGB colors, one per streamline (N x 3). Returns empty array (0, 3) if streamlines is empty.
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def calculate_direction_colors(streamlines: Streamlines) -> np.ndarray:
+    """Calculate colors for streamlines based on their diffusion direction.
+
+    Standard RGB mapping:
+    - Red = X-axis (left/right)
+    - Green = Y-axis (anterior/posterior)
+    - Blue = Z-axis (superior/inferior)
+
+    Parameters
+    ----------
+    streamlines : Streamlines
+        The streamlines to calculate colors for.
+
+    Returns
+    -------
+    np.ndarray
+        Array of RGB colors, one per streamline (N x 3).
+        Returns empty array (0, 3) if streamlines is empty.
+    """
+    # Return empty array if streamlines is empty (matches test expectations)
+    if not streamlines or len(streamlines) == 0:
+        return np.array([]).reshape(0, 3)
+    streamline_colors = []
+    max_range = 1e-10
+    sl_len = 2
+    for sl in streamlines:
+        sl_array = np.array(sl)
+        if len(sl_array) < sl_len:
+            # Degenerate streamline, use default color
+            streamline_colors.append([0.5, 0.5, 0.5])
+            continue
+
+        # Calculate direction vector (from start to end)
+        direction = sl_array[-1] - sl_array[0]
+        direction_norm = np.linalg.norm(direction)
+
+        if direction_norm < max_range:
+            # Degenerate direction, use default color
+            streamline_colors.append([0.5, 0.5, 0.5])
+            continue
+
+        # Normalize direction to unit vector
+        direction = direction / direction_norm
+
+        # Map direction components to RGB using absolute values
+        # X -> Red (left/right), Y -> Green (anterior/posterior), Z -> Blue (superior/inferior)
+        r = abs(direction[0])  # X component -> Red
+        g = abs(direction[1])  # Y component -> Green
+        b = abs(direction[2])  # Z component -> Blue
+
+        # Normalize by the maximum component to ensure colors are in 0-1 range
+        # This preserves the relative direction while ensuring valid RGB values
+        max_component = max(r, g, b)
+        if max_component > max_range:
+            r = r / max_component
+            g = g / max_component
+            b = b / max_component
+        else:
+            # Fallback for edge case
+            r, g, b = 0.5, 0.5, 0.5
+
+        streamline_colors.append([r, g, b])
+
+    return np.array(streamline_colors)
+```
+
+## infer_template_space_from_paths
+
+```
+infer_template_space_from_paths(
+    *paths: str | Path,
+) -> Literal["ras", "mni"]
+```
+
+Infer template space (camera convention) from file path(s).
+
+If any path contains a known template/standard-space indicator (e.g. MNI, Talairach, BIDS template prefix), returns `"mni"` so the camera uses radiological convention. Otherwise returns `"ras"`.
+
+Not all template-aligned files include these substrings; when in doubt, pass `template_space` explicitly to the visualization method.
+
+#### Parameters
+
+\*paths : str or Path One or more file paths (e.g. atlas file, reference image) to check.
+
+#### Returns
+
+{"ras", "mni"} `"mni"` if any path suggests template space, else `"ras"`.
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def infer_template_space_from_paths(*paths: str | Path) -> Literal["ras", "mni"]:
+    """Infer template space (camera convention) from file path(s).
+
+    If any path contains a known template/standard-space indicator (e.g. MNI,
+    Talairach, BIDS template prefix), returns ``"mni"`` so the camera uses
+    radiological convention. Otherwise returns ``"ras"``.
+
+    Not all template-aligned files include these substrings; when in doubt,
+    pass ``template_space`` explicitly to the visualization method.
+
+    Parameters
+    ----------
+    *paths : str or Path
+        One or more file paths (e.g. atlas file, reference image) to check.
+
+    Returns
+    -------
+    {"ras", "mni"}
+        ``"mni"`` if any path suggests template space, else ``"ras"``.
+    """
+    combined = " ".join(str(p).lower() for p in paths if p is not None)
+    return "mni" if any(ind in combined for ind in TEMPLATE_SPACE_INDICATORS) else "ras"
+```
+
+## set_anatomical_camera
+
+```
+set_anatomical_camera(
+    scene: Scene,
+    centroid: ndarray,
+    view_name: str,
+    *,
+    camera_distance: float | None = None,
+    bbox_size: ndarray | None = None,
+    template_space: Literal["ras", "mni"] = "ras",
+) -> None
+```
+
+Set camera position for standard anatomical views.
+
+This function positions the camera for coronal, axial, or sagittal views without rotating the streamlines, ensuring colors stay aligned.
+
+#### Parameters
+
+scene : window.Scene The FURY scene to set the camera on. centroid : np.ndarray The centroid of the streamlines (3D coordinates). view_name : str Name of the view: "coronal", "axial", or "sagittal". camera_distance : float | None, optional Distance of camera from centroid. If None, calculated from bbox_size. bbox_size : np.ndarray | None, optional Bounding box size of streamlines. Used to calculate camera_distance if not provided. template_space : {"ras", "mni"}, optional Coordinate convention for the template. Use "ras" for standard RAS (e.g. native T1). Use "mni" for MNI-space templates, which uses opposite camera sides so left/right and superior/inferior match radiological convention. Default is "ras".
+
+#### Raises
+
+ValueError If view_name is not one of the standard anatomical views.
+
+Source code in `src/pytractoviz/utils.py`
+
+```
+def set_anatomical_camera(
+    scene: window.Scene,
+    centroid: np.ndarray,
+    view_name: str,
+    *,
+    camera_distance: float | None = None,
+    bbox_size: np.ndarray | None = None,
+    template_space: Literal["ras", "mni"] = "ras",
+) -> None:
+    """Set camera position for standard anatomical views.
+
+    This function positions the camera for coronal, axial, or sagittal views
+    without rotating the streamlines, ensuring colors stay aligned.
+
+    Parameters
+    ----------
+    scene : window.Scene
+        The FURY scene to set the camera on.
+    centroid : np.ndarray
+        The centroid of the streamlines (3D coordinates).
+    view_name : str
+        Name of the view: "coronal", "axial", or "sagittal".
+    camera_distance : float | None, optional
+        Distance of camera from centroid. If None, calculated from bbox_size.
+    bbox_size : np.ndarray | None, optional
+        Bounding box size of streamlines. Used to calculate camera_distance if not provided.
+    template_space : {"ras", "mni"}, optional
+        Coordinate convention for the template. Use "ras" for standard RAS (e.g. native T1).
+        Use "mni" for MNI-space templates, which uses opposite camera sides so left/right
+        and superior/inferior match radiological convention. Default is "ras".
+
+    Raises
+    ------
+    ValueError
+        If view_name is not one of the standard anatomical views.
+    """
+    if view_name not in ANATOMICAL_VIEW_NAMES:
+        raise ValueError(
+            f"Invalid view name: {view_name}. Must be one of: {list(ANATOMICAL_VIEW_NAMES)}",
+        )
+
+    # Calculate camera distance if not provided
+    if camera_distance is None:
+        max_dim = np.max(bbox_size) if bbox_size is not None else 100.0
+        camera_distance = max_dim * 2.5
+
+    use_mni = template_space == "mni"
+
+    # Define camera positions and view_up vectors for each anatomical view.
+    # RAS: camera from posterior (-Y) coronal, from +Z axial, from -X sagittal.
+    # MNI: flip camera side so anatomy matches radiological convention (anterior +Y, etc.).
+    if view_name == "coronal":
+        if use_mni:
+            camera_position = centroid + np.array([0, camera_distance, 0])  # From anterior (+Y)
+        else:
+            camera_position = centroid + np.array([0, -camera_distance, 0])  # From posterior (-Y)
+        view_up = np.array([0, 0, 1])  # Superior is up
+    elif view_name == "axial":
+        if use_mni:
+            camera_position = centroid + np.array([0, 0, camera_distance])  # From inferior (+Z)
+            view_up = np.array([0, 1, 0])  # Anterior as up
+        else:
+            camera_position = centroid + np.array([0, 0, camera_distance])  # From superior (+Z)
+            view_up = np.array([0, -1, 0])  # Posterior as up (flips left/right)
+    else:  # sagittal
+        if use_mni:
+            camera_position = centroid + np.array([camera_distance, 0, 0])  # From right (+X)
+        else:
+            camera_position = centroid + np.array([-camera_distance, 0, 0])  # From left (-X)
+        view_up = np.array([0, 0, 1])  # Superior is up
+
+    # Set camera
+    scene.set_camera(
+        position=camera_position,
+        focal_point=centroid,
+        view_up=view_up,
+    )
+```
+
+# viz
+
+Visualization module for diffusion tractography.
+
+Classes:
+
+- **`InvalidInputError`** – Raised when input data is invalid.
+- **`TractographyVisualizationError`** – Base exception for tractography visualization errors.
+- **`TractographyVisualizer`** – A class for visualizing diffusion tractography data.
+
+## InvalidInputError
+
+Bases: `TractographyVisualizationError`
+
+Raised when input data is invalid.
+
+## TractographyVisualizationError
+
+Bases: `Exception`
+
+Base exception for tractography visualization errors.
+
+## TractographyVisualizer
+
+```
+TractographyVisualizer(
+    reference_image: str | Path | None = None,
+    output_directory: str | Path | None = None,
+    *,
+    gif_size: tuple[int, int] = (608, 608),
+    gif_duration: float = 0.2,
+    gif_palette_size: int = 64,
+    gif_frames: int = 60,
+    min_streamline_length: float = 40.0,
+    cci_threshold: float = 1.0,
+    afq_resample_points: int = 100,
+    n_jobs: int = 1,
+    max_memory_mb: float | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+)
+```
+
+A class for visualizing diffusion tractography data.
+
+This class provides methods for loading, processing, and visualizing tractography data, including generating static images, animations, and quality metrics.
+
+#### Parameters
+
+reference_image : str | Path, optional Path to the reference T1-weighted image. Can be set later via `set_reference_image()`. output_directory : str | Path, optional Default output directory for generated files. Can be set later via `set_output_directory()`. gif_size : tuple[int, int], optional Size of generated GIFs in pixels. Default is (608, 608). gif_duration : float, optional Duration per frame in seconds. Default is 0.2. gif_palette_size : int, optional Color palette size for GIF optimization. Default is 64. gif_frames : int, optional Number of frames in rotation animation. Default is 60. min_streamline_length : float, optional Minimum streamline length for CCI calculation. Default is 40.0. cci_threshold : float, optional Minimum CCI value to keep streamlines. Default is 1.0. afq_resample_points : int, optional Number of points for AFQ resampling. Default is 100. n_jobs : int, optional Number of parallel jobs to run for processing multiple subjects/tracts. Default is 1 (sequential processing). Use -1 to automatically determine optimal number based on available resources (respects SLURM allocations and OpenMP thread settings to prevent oversubscription). Only used in `run_quality_check_workflow()`.
+
+```
+Note: When running under SLURM, this will automatically use
+SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
+it will divide the available CPUs by the number of OpenMP threads to
+prevent resource contention.
+```
+
+max_memory_mb : float | None, optional Maximum memory limit in MB for the process. If set, the process will be killed by the OS if it exceeds this limit. This helps prevent OOM kills by setting a hard limit. Default is None (no limit).
+
+```
+Note: This uses resource.setrlimit() which sets a virtual memory limit.
+Once set, the limit cannot be increased (only decreased).
+```
+
+figure_size : tuple[int, int], optional Default size for generated static images in pixels. Default is (800, 800). Can be overridden per method call. Smaller sizes use less memory and may help avoid VTK segfaults with large tractograms.
+
+#### Examples
+
+Single subject usage:
+
+> > > visualizer = TractographyVisualizer( ... reference_image="path/to/t1w.nii.gz", output_directory="output/" ... ) visualizer.generate_videos( ... tract_files=["tract1.trk", "tract2.trk"], ref_file="t1w.nii.gz" ... )
+
+Multiple subjects usage (initialize once, set data per subject):
+
+> > > visualizer = TractographyVisualizer(output_directory="output/")
+> > >
+> > > ### Process subject 1
+> > >
+> > > visualizer.generate_videos( ... tract_files=["subj1_tract1.trk"], ref_file="subj1_t1w.nii.gz" ... )
+> > >
+> > > ### Process subject 2
+> > >
+> > > visualizer.generate_videos( ... tract_files=["subj2_tract1.trk"], ref_file="subj2_t1w.nii.gz" ... )
+
+Methods:
+
+- **`calc_cci`** – Calculate Cluster Confidence Index (CCI) for tractography.
+- **`calculate_shape_similarity`** – Calculate shape similarity score between tract and atlas.
+- **`compare_before_after_cci`** – Generate CCI histogram and before/after CCI views (original vs filtered).
+- **`convert_gif_to_mp4`** – Convert a GIF file to MP4 format.
+- **`generate_anatomical_views`** – Generate snapshots from standard anatomical views.
+- **`generate_atlas_views`** – Generate anatomical views for an atlas tract or NIfTI ROI.
+- **`generate_gif`** – Generate a GIF animation of rotating tractography.
+- **`generate_videos`** – Generate MP4 videos from multiple tractography files.
+- **`get_glass_brain`** – Get the glass brain actor for the T1-weighted image.
+- **`load_tract`** – Load the tractography file and create an actor.
+- **`plot_afq`** – Plot AFQ profile with anatomical views.
+- **`run_quality_check_workflow`** – Run comprehensive quality checks for multiple subjects and tracts.
+- **`set_output_directory`** – Set the output directory for generated files.
+- **`set_reference_image`** – Set the reference T1-weighted image.
+- **`view_tract_interactive`** – Display a tract in an interactive 3D viewer.
+- **`visualize_bundle_assignment`** – Visualize bundle assignment map using DIPY's assignment_map.
+- **`visualize_shape_similarity`** – Visualize shape similarity by overlaying subject and atlas tracts.
+- **`weighted_afq`** – Calculate weighted AFQ profile for tractography.
+
+Attributes:
+
+- **`output_directory`** (`Path | None`) – Get the current output directory path.
+- **`reference_image`** (`Path | None`) – Get the current reference image path.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def __init__(
+    self,
+    reference_image: str | Path | None = None,
+    output_directory: str | Path | None = None,
+    *,
+    gif_size: tuple[int, int] = (608, 608),
+    gif_duration: float = 0.2,
+    gif_palette_size: int = 64,
+    gif_frames: int = 60,
+    min_streamline_length: float = 40.0,
+    cci_threshold: float = 1.0,
+    afq_resample_points: int = 100,
+    n_jobs: int = 1,
+    max_memory_mb: float | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+) -> None:
+    """Initialize the TractographyVisualizer."""
+    # Initialize VTK for headless rendering BEFORE any VTK operations
+    # This is critical for cluster jobs that don't have a display
+    # Set environment variables before any VTK imports are used
+    if "DISPLAY" not in os.environ:
+        # No display available - force offscreen rendering
+        os.environ.setdefault("VTK_USE_OFFSCREEN", "1")
+        os.environ.setdefault("VTK_USE_OSMESA", "0")
+        logger.debug("No DISPLAY detected, enabling VTK offscreen rendering")
+    else:
+        # Display available, but still set offscreen as fallback
+        os.environ.setdefault("VTK_USE_OFFSCREEN", "1")
+        logger.debug("DISPLAY detected, but VTK offscreen rendering enabled as fallback")
+
+    # Additional VTK settings for stability
+    os.environ.setdefault("VTK_STREAM_READER", "1")
+    os.environ.setdefault("VTK_STREAM_WRITER", "1")
+
+    # Disable VTK warnings (can cause issues in some environments)
+    with contextlib.suppress(AttributeError, RuntimeError, ImportError):
+        vtk.vtkObject.GlobalWarningDisplayOff()
+        with contextlib.suppress(AttributeError, RuntimeError):
+            vtk.vtkOutputWindow.SetGlobalWarningDisplay(0)
+
+    # Set matplotlib to non-interactive backend for headless environments
+    with contextlib.suppress(ImportError, ValueError, RuntimeError):
+        plt.switch_backend("Agg")
+
+    self._reference_image: Path | None = None
+    self._output_directory: Path | None = None
+    self.max_memory_mb: float | None = None
+
+    if reference_image is not None:
+        self.set_reference_image(reference_image)
+    if output_directory is not None:
+        self.set_output_directory(output_directory)
+
+    self.gif_size = gif_size
+    self.gif_duration = gif_duration
+    self.gif_palette_size = gif_palette_size
+    self.gif_frames = gif_frames
+    self.min_streamline_length = min_streamline_length
+    self.cci_threshold = cci_threshold
+    self.afq_resample_points = afq_resample_points
+    self.figure_size = figure_size
+    # Handle n_jobs: -1 means use all CPUs, otherwise use specified value
+    if n_jobs == -1:
+        self.n_jobs = _get_optimal_n_jobs()
+    else:
+        self.n_jobs = n_jobs
+
+    # Set memory limit if specified
+    if max_memory_mb is not None:
+        _set_memory_limit(max_memory_mb)
+        self.max_memory_mb = max_memory_mb
+    else:
+        self.max_memory_mb = None
+```
+
+### output_directory
+
+```
+output_directory: Path | None
+```
+
+Get the current output directory path.
+
+### reference_image
+
+```
+reference_image: Path | None
+```
+
+Get the current reference image path.
+
+### calc_cci
+
+```
+calc_cci(
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+) -> tuple[
+    ndarray, ndarray, StatefulTractogram, Streamlines
+]
+```
+
+Calculate Cluster Confidence Index (CCI) for tractography.
+
+##### Parameters
+
+tract_file : str | Path Path to the tractography file. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization or via `set_reference_image()`.
+
+##### Returns
+
+tuple[np.ndarray, np.ndarray, StatefulTractogram, Streamlines] A tuple containing:
+
+- CCI values for all long streamlines (one per streamline).
+- CCI values above threshold (aligned with kept streamlines).
+- Filtered tractogram with streamlines above threshold.
+- Long streamlines used for CCI (length > min_streamline_length).
+
+##### Raises
+
+InvalidInputError If the tractogram is empty or processing fails, or if no reference image is provided and none was set. TractographyVisualizationError If calculation fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def calc_cci(
+    self,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+) -> tuple[np.ndarray, np.ndarray, StatefulTractogram, Streamlines]:
+    """Calculate Cluster Confidence Index (CCI) for tractography.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the tractography file.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization or via `set_reference_image()`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, StatefulTractogram, Streamlines]
+        A tuple containing:
+        - CCI values for all long streamlines (one per streamline).
+        - CCI values above threshold (aligned with kept streamlines).
+        - Filtered tractogram with streamlines above threshold.
+        - Long streamlines used for CCI (length > min_streamline_length).
+
+    Raises
+    ------
+    InvalidInputError
+        If the tractogram is empty or processing fails, or if no reference
+        image is provided and none was set.
+    TractographyVisualizationError
+        If calculation fails.
+    """
+    tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+    tract.to_rasmm()
+
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+
+    try:
+        lengths = list(length(tract.streamlines))
+        long_streamlines = Streamlines()
+        for i, sl in enumerate(tract.streamlines):
+            if lengths[i] > self.min_streamline_length:
+                long_streamlines.append(sl)
+
+        if len(long_streamlines) == 0:
+            raise InvalidInputError(
+                f"No streamlines longer than {self.min_streamline_length}mm found.",
+            )
+
+        cci = cluster_confidence(long_streamlines)
+
+        # Create boolean mask for streamlines above threshold
+        keep_mask = cci >= self.cci_threshold
+
+        # Filter streamlines and CCI values to match
+        keep_streamlines = Streamlines()
+        for i, sl in enumerate(long_streamlines):
+            if keep_mask[i]:
+                keep_streamlines.append(sl)
+
+        # Filter CCI array to match kept streamlines
+        keep_cci = cci[keep_mask]
+        keep_tract = StatefulTractogram(keep_streamlines, nib.load(str(ref_img)), Space.RASMM)
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError, IndexError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to calculate CCI: {e}",
+        ) from e
+    else:
+        return cci, keep_cci, keep_tract, long_streamlines
+```
+
+### calculate_shape_similarity
+
+```
+calculate_shape_similarity(
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    *,
+    atlas_ref_img: str | Path | None = None,
+    clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+    threshold: float = 6,
+    rng: Generator | None = None,
+) -> float
+```
+
+Calculate shape similarity score between tract and atlas.
+
+Uses DIPY's bundle_shape_similarity function with the Bundle Adjacency (BA) metric to compute how closely the shapes of two bundles align.
+
+##### Parameters
+
+tract_file : str | Path Path to the subject tractography file. atlas_file : str | Path Path to the atlas tractography file. atlas_ref_img : str | Path | None, optional Path to the reference image that matches the atlas coordinate space (e.g., MNI template if atlas is in MNI space). If None, assumes atlas is in the same space as the subject tract. This is important if the atlas is in a different space (e.g., MNI) than the subject. clust_thr : tuple[float, float, float], optional Clustering thresholds for QuickBundlesX used internally. Default is (5, 3, 1.5). threshold : float, optional Threshold controlling the strictness of the shape similarity assessment. A smaller threshold requires the bundles to be more similar to achieve a higher score. Default is 6. rng : np.random.Generator | None, optional Random number generator. If None, creates a new one. Default is None.
+
+##### Returns
+
+float Bundle similarity score (BA value). Higher values indicate greater similarity between the bundles.
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If tracts are empty or invalid. TractographyVisualizationError If calculation fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer() score = visualizer.calculate_shape_similarity( ... "subject_tract.trk", "atlas_tract.trk" ... ) print(f"Shape similarity score: {score}")
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def calculate_shape_similarity(
+    self,
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    *,
+    atlas_ref_img: str | Path | None = None,
+    clust_thr: tuple[float, float, float] = (5, 3, 1.5),
+    threshold: float = 6,
+    rng: np.random.Generator | None = None,
+) -> float:
+    """Calculate shape similarity score between tract and atlas.
+
+    Uses DIPY's bundle_shape_similarity function with the Bundle Adjacency (BA) metric
+    to compute how closely the shapes of two bundles align.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the subject tractography file.
+    atlas_file : str | Path
+        Path to the atlas tractography file.
+    atlas_ref_img : str | Path | None, optional
+        Path to the reference image that matches the atlas coordinate space
+        (e.g., MNI template if atlas is in MNI space). If None, assumes atlas
+        is in the same space as the subject tract. This is important if the
+        atlas is in a different space (e.g., MNI) than the subject.
+    clust_thr : tuple[float, float, float], optional
+        Clustering thresholds for QuickBundlesX used internally.
+        Default is (5, 3, 1.5).
+    threshold : float, optional
+        Threshold controlling the strictness of the shape similarity assessment.
+        A smaller threshold requires the bundles to be more similar to achieve
+        a higher score. Default is 6.
+    rng : np.random.Generator | None, optional
+        Random number generator. If None, creates a new one. Default is None.
+
+    Returns
+    -------
+    float
+        Bundle similarity score (BA value). Higher values indicate greater
+        similarity between the bundles.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If tracts are empty or invalid.
+    TractographyVisualizationError
+        If calculation fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer()
+    >>> score = visualizer.calculate_shape_similarity(
+    ...     "subject_tract.trk", "atlas_tract.trk"
+    ... )
+    >>> print(f"Shape similarity score: {score}")
+    """
+    try:
+        # Load both tracts
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+
+        atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+        atlas_tract.to_rasmm()
+
+        # Check if tracts are empty
+        if not tract.streamlines or len(tract.streamlines) == 0:
+            raise InvalidInputError("Subject tract is empty.")
+        if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+            raise InvalidInputError("Atlas tract is empty.")
+
+        # Transform atlas to subject space if needed
+        if atlas_ref_img is not None:
+            atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+
+            # Transform atlas streamlines to subject reference space
+            atlas_streamlines = transform_streamlines(
+                atlas_tract.streamlines,
+                np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+        else:
+            # No transformation needed, use streamlines directly
+            atlas_streamlines = atlas_tract.streamlines
+
+        # Use subject tract streamlines directly (already in RASMM)
+        subject_streamlines = tract.streamlines
+
+        # Create random number generator if not provided
+        if rng is None:
+            rng = np.random.default_rng()
+
+        # Calculate shape similarity using DIPY's function
+        similarity_score = bundle_shape_similarity(
+            subject_streamlines,
+            atlas_streamlines,
+            rng,
+            clust_thr=clust_thr,
+            threshold=threshold,
+        )
+
+        return float(similarity_score)
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError, IndexError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to calculate shape similarity: {e}",
+        ) from e
+```
+
+### compare_before_after_cci
+
+```
+compare_before_after_cci(
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    bins: int = 100,
+    overwrite: bool = False,
+    cci: ndarray | None = None,
+    keep_cci: ndarray | None = None,
+    keep_tract: StatefulTractogram | None = None,
+    long_streamlines: Streamlines | None = None,
+) -> dict[str, Path] | dict[str, Path | dict[str, Path]]
+```
+
+Generate CCI histogram and before/after CCI views (original vs filtered).
+
+Calls :meth:`calc_cci` (or uses optional precomputed outputs) and produces:
+
+- A histogram of CCI values (`<tract>_cci_histogram.png`).
+- For each anatomical view: original tract colored by CCI (`cci_before_<tract>_<view>.png`) and filtered tract colored by filtered CCI (`cci_after_<tract>_<view>.png`).
+
+##### Parameters
+
+tract_file : str | Path Path to the tractography file. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization. views : list[str] | None, optional List of views to generate. Options: "coronal", "axial", "sagittal". If None, generates all three views. Default is None. output_dir : str | Path | None, optional Output directory for generated images. If None, uses the output directory set during initialization. figure_size : tuple[int, int], optional Size of each image in pixels. Default is (800, 800). show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. bins : int, optional Number of bins for the CCI histogram. Default is 100. max_streamlines : int | None, optional Maximum number of streamlines to keep for visualization. If None, no limit. subsample_factor : float | None, optional Fraction of streamlines to keep (0-1). If None, no subsampling. overwrite : bool, optional If True, regenerate images even when output files already exist. Default is False. cci : np.ndarray | None, optional Precomputed CCI for all long streamlines. If provided with keep_cci, keep_tract, and long_streamlines, :meth:`calc_cci` is not called. keep_cci : np.ndarray | None, optional Precomputed CCI above threshold (aligned with keep_tract). keep_tract : StatefulTractogram | None, optional Precomputed filtered tractogram. long_streamlines : Streamlines | None, optional Precomputed long streamlines used for CCI (length > min_streamline_length).
+
+##### Returns
+
+dict[str, Path] | dict\[str, Path | dict[str, Path]\]
+
+- Key "histogram": Path to the CCI histogram image.
+- For each view (coronal, axial, sagittal): a dict with keys before and after, each mapping to the Path of that image.
+
+##### Raises
+
+InvalidInputError If no output directory or reference image, or invalid view name. TractographyVisualizationError If comparison fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer( ... reference_image="t1w.nii.gz", output_directory="output/" ... ) result = visualizer.compare_before_after_cci("tract.trk") result["histogram"] list(result["coronal"].keys()) ['before', 'after']
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def compare_before_after_cci(
+    self,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    bins: int = 100,
+    overwrite: bool = False,
+    cci: np.ndarray | None = None,
+    keep_cci: np.ndarray | None = None,
+    keep_tract: StatefulTractogram | None = None,
+    long_streamlines: Streamlines | None = None,
+) -> dict[str, Path] | dict[str, Path | dict[str, Path]]:
+    """Generate CCI histogram and before/after CCI views (original vs filtered).
+
+    Calls :meth:`calc_cci` (or uses optional precomputed outputs) and produces:
+    - A histogram of CCI values (`<tract>_cci_histogram.png`).
+    - For each anatomical view: original tract colored by CCI (`cci_before_<tract>_<view>.png`)
+      and filtered tract colored by filtered CCI (`cci_after_<tract>_<view>.png`).
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the tractography file.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization.
+    views : list[str] | None, optional
+        List of views to generate. Options: "coronal", "axial", "sagittal".
+        If None, generates all three views. Default is None.
+    output_dir : str | Path | None, optional
+        Output directory for generated images. If None, uses the output
+        directory set during initialization.
+    figure_size : tuple[int, int], optional
+        Size of each image in pixels. Default is (800, 800).
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    bins : int, optional
+        Number of bins for the CCI histogram. Default is 100.
+    max_streamlines : int | None, optional
+        Maximum number of streamlines to keep for visualization. If None, no limit.
+    subsample_factor : float | None, optional
+        Fraction of streamlines to keep (0-1). If None, no subsampling.
+    overwrite : bool, optional
+        If True, regenerate images even when output files already exist.
+        Default is False.
+    cci : np.ndarray | None, optional
+        Precomputed CCI for all long streamlines. If provided with keep_cci,
+        keep_tract, and long_streamlines, :meth:`calc_cci` is not called.
+    keep_cci : np.ndarray | None, optional
+        Precomputed CCI above threshold (aligned with keep_tract).
+    keep_tract : StatefulTractogram | None, optional
+        Precomputed filtered tractogram.
+    long_streamlines : Streamlines | None, optional
+        Precomputed long streamlines used for CCI (length > min_streamline_length).
+
+    Returns
+    -------
+    dict[str, Path] | dict[str, Path | dict[str, Path]]
+        - Key "histogram": Path to the CCI histogram image.
+        - For each view (coronal, axial, sagittal): a dict with keys
+          before and after, each mapping to the Path of that image.
+
+    Raises
+    ------
+    InvalidInputError
+        If no output directory or reference image, or invalid view name.
+    TractographyVisualizationError
+        If comparison fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(
+    ...     reference_image="t1w.nii.gz", output_directory="output/"
+    ... )
+    >>> result = visualizer.compare_before_after_cci("tract.trk")
+    >>> result["histogram"]
+    >>> list(result["coronal"].keys())
+    ['before', 'after']
+    """
+    # Determine which views to generate
+    if views is None:
+        views_to_generate = list(ANATOMICAL_VIEW_NAMES)
+    else:
+        views_to_generate = views
+        invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
+        if invalid_views:
+            raise InvalidInputError(
+                f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
+            )
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    tract_name = Path(tract_file).stem
+    hist_path = output_dir / f"{tract_name}_cci_histogram.png"
+    generated_views: dict[str, Path | dict[str, Path]] = {}
+
+    # Check if histogram and all view files already exist (skip loading tract)
+    all_files_exist = True
+    if not hist_path.exists() or overwrite:
+        all_files_exist = False
+    else:
+        generated_views["histogram"] = hist_path
+    for view_name in views_to_generate:
+        output_before = output_dir / f"cci_before_{tract_name}_{view_name}.png"
+        output_after = output_dir / f"cci_after_{tract_name}_{view_name}.png"
+        if output_before.exists() and output_after.exists() and not overwrite:
+            generated_views[view_name] = {"before": output_before, "after": output_after}
+            logger.debug(
+                "Skipping generation of before/after CCI for %s (%s, %s already exist)",
+                view_name,
+                output_before,
+                output_after,
+            )
+        else:
+            all_files_exist = False
+
+    if all_files_exist:
+        return generated_views
+
+    try:
+        # Get CCI and tracts: use precomputed or call calc_cci
+        if cci is not None and keep_cci is not None and keep_tract is not None and long_streamlines is not None:
+            pass  # use provided arrays/tracts
+        else:
+            # Ensure ref_img is set so calc_cci never sees None (e.g. if kwargs overrode it earlier)
+            if ref_img is None:
+                ref_img = self._reference_image
+            if ref_img is None:
+                raise InvalidInputError(
+                    "No reference image provided. Set it via constructor or "
+                    "set_reference_image() method, or pass it as an argument.",
+                )
+            cci, keep_cci, keep_tract, long_streamlines = self.calc_cci(
+                tract_file,
+                ref_img=ref_img,
+            )
+
+        if len(cci) == 0:
+            logger.warning("No CCI values; skipping CCI visualization.")
+            return generated_views
+
+        ref_img_obj = nib.load(str(ref_img))
+        inv_affine = np.linalg.inv(ref_img_obj.affine)  # type: ignore[attr-defined]
+
+        # Histogram
+        if not hist_path.exists() or overwrite:
+            fig, ax = plt.subplots(1, figsize=(8, 6))
+            ax.hist(cci, bins=bins, histtype="step")
+            ax.set_xlabel("CCI")
+            ax.set_ylabel("# streamlines")
+            ax.set_title("CCI Distribution")
+            ax.grid(visible=True, alpha=0.3)
+            fig.savefig(str(hist_path), dpi=150, bbox_inches="tight")
+            plt.close(fig)
+        generated_views["histogram"] = hist_path
+
+        # Transform to reference space and optionally subsample
+        before_streamlines = transform_streamlines(long_streamlines, inv_affine)
+        after_streamlines = transform_streamlines(
+            keep_tract.streamlines,
+            inv_affine,
+        )
+        cci_before = np.asarray(cci, dtype=np.float64)
+
+        cci_min = float(np.min(cci))
+        cci_max = float(np.max(cci))
+        hue = [0.5, 1]
+        saturation = [0.0, 1.0]
+        lut_cmap = actor.colormap_lookup_table(
+            scale_range=(cci_min, cci_max / 4),
+            hue_range=hue,
+            saturation_range=saturation,
+        )
+        bar = actor.scalar_bar(lookup_table=lut_cmap)
+        centroid = calculate_combined_centroid(before_streamlines, after_streamlines)
+
+        # Generate each requested view
+        for view_name in views_to_generate:
+            output_before = output_dir / f"cci_before_{tract_name}_{view_name}.png"
+            output_after = output_dir / f"cci_after_{tract_name}_{view_name}.png"
+
+            if output_before.exists() and output_after.exists() and not overwrite:
+                continue
+
+            # Before: original tract colored by CCI
+            scene_before, brain_actor_before = self._create_scene(
+                ref_img=ref_img,
+                show_glass_brain=show_glass_brain,
+            )
+            scene_before.add(bar)
+            try:
+                before_actor = actor.line(
+                    before_streamlines,
+                    colors=cci_before,
+                    linewidth=0.1,
+                    lookup_colormap=lut_cmap,
+                )
+                scene_before.add(before_actor)
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed for before CCI actor (likely std::bad_alloc). "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                    )
+                    scene_before.clear()
+                    del scene_before
+                    if brain_actor_before is not None:
+                        del brain_actor_before
+                    gc.collect()
+                    continue
+                raise
+
+            bbox_size_before = calculate_bbox_size(before_streamlines)
+            self._set_anatomical_camera(
+                scene_before,
+                centroid,
+                view_name,
+                bbox_size=bbox_size_before,
+            )
+
+            # After: filtered tract colored by filtered CCI
+            scene_after, brain_actor_after = self._create_scene(
+                ref_img=ref_img,
+                show_glass_brain=show_glass_brain,
+            )
+            try:
+                after_actor = actor.line(
+                    after_streamlines,
+                    linewidth=0.1,
+                )
+                scene_after.add(after_actor)
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed for after CCI actor (likely std::bad_alloc). "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                    )
+                    scene_before.clear()
+                    scene_after.clear()
+                    del before_actor
+                    if brain_actor_before is not None:
+                        del brain_actor_before
+                    if brain_actor_after is not None:
+                        del brain_actor_after
+                    del scene_before, scene_after
+                    gc.collect()
+                    continue
+                raise
+
+            bbox_size_after = calculate_bbox_size(after_streamlines)
+            self._set_anatomical_camera(
+                scene_after,
+                centroid,
+                view_name,
+                bbox_size=bbox_size_after,
+            )
+
+            try:
+                window.record(
+                    scene=scene_before,
+                    out_path=str(output_before),
+                    size=figure_size,
+                )
+                window.record(
+                    scene=scene_after,
+                    out_path=str(output_after),
+                    size=figure_size,
+                )
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        view_name,
+                    )
+                    scene_before.clear()
+                    scene_after.clear()
+                    del before_actor, after_actor
+                    if brain_actor_before is not None:
+                        del brain_actor_before
+                    if brain_actor_after is not None:
+                        del brain_actor_after
+                    del scene_before, scene_after
+                    gc.collect()
+                    continue
+                raise
+
+            scene_before.clear()
+            scene_after.clear()
+            del before_actor, after_actor
+            if brain_actor_before is not None:
+                del brain_actor_before
+            if brain_actor_after is not None:
+                del brain_actor_after
+            del scene_before, scene_after
+            gc.collect()
+
+            generated_views[view_name] = {"before": output_before, "after": output_after}
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to compare before/after CCI: {e}",
+        ) from e
+    else:
+        return generated_views
+```
+
+### convert_gif_to_mp4
+
+```
+convert_gif_to_mp4(
+    gif_path: str | Path,
+    mp4_path: str | Path | None = None,
+    *,
+    fps: int = 10,
+    overwrite: bool = False,
+) -> Path
+```
+
+Convert a GIF file to MP4 format.
+
+##### Parameters
+
+gif_path : str | Path Path to the input GIF file. mp4_path : str | Path | None, optional Path to the output MP4 file. If None, uses the same name as GIF with .mp4 extension. fps : int, optional Frames per second for the video. Default is 10. overwrite : bool, optional If True, overwrite MP4 even when output file already exists. Default is False.
+
+##### Returns
+
+Path Path to the generated MP4 file.
+
+##### Raises
+
+FileNotFoundError If the GIF file is not found. TractographyVisualizationError If conversion fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def convert_gif_to_mp4(
+    self,
+    gif_path: str | Path,
+    mp4_path: str | Path | None = None,
+    *,
+    fps: int = 10,
+    overwrite: bool = False,
+) -> Path:
+    """Convert a GIF file to MP4 format.
+
+    Parameters
+    ----------
+    gif_path : str | Path
+        Path to the input GIF file.
+    mp4_path : str | Path | None, optional
+        Path to the output MP4 file. If None, uses the same name as GIF
+        with .mp4 extension.
+    fps : int, optional
+        Frames per second for the video. Default is 10.
+    overwrite : bool, optional
+        If True, overwrite MP4 even when output file already exists.
+        Default is False.
+
+    Returns
+    -------
+    Path
+        Path to the generated MP4 file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the GIF file is not found.
+    TractographyVisualizationError
+        If conversion fails.
+    """
+    gif_path_obj = Path(gif_path)
+    if mp4_path is None:
+        mp4_path = gif_path_obj.with_suffix(".mp4")
+    else:
+        mp4_path = Path(mp4_path)
+        mp4_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Skip if file already exists
+    if mp4_path.exists() and not overwrite:
+        logger.debug("Skipping conversion of %s to %s (file already exists)", gif_path, mp4_path)
+        return mp4_path
+
+    try:
+        reader = imageio.get_reader(str(gif_path_obj))
+        writer = imageio.get_writer(
+            str(mp4_path),
+            format="FFMPEG",  # type: ignore[arg-type]
+            fps=fps,
+            codec="libx264",
+        )
+
+        for frame in reader:  # type: ignore[attr-defined]
+            writer.append_data(frame)
+
+        writer.close()
+        reader.close()
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to convert GIF to MP4: {e}",
+        ) from e
+    else:
+        return mp4_path
+```
+
+### generate_anatomical_views
+
+```
+generate_anatomical_views(
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] | None = None,
+    show_glass_brain: bool = True,
+    overwrite: bool = False,
+) -> dict[str, Path]
+```
+
+Generate snapshots from standard anatomical views.
+
+Creates static images from coronal, axial, and sagittal views of the tract.
+
+##### Parameters
+
+tract_file : str | Path Path to the tractography file. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization or via `set_reference_image()`. views : list[str] | None, optional List of views to generate. Options: "coronal", "axial", "sagittal". If None, generates all three views. Default is None. output_dir : str | Path | None, optional Output directory for generated images. If None, uses the output directory set during initialization. figure_size : tuple[int, int] | None, optional Size of the output images in pixels. If None, uses the default set during initialization (default: (800, 800)). Default is None. show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. overwrite : bool, optional If True, regenerate images even when output files already exist. Default is False.
+
+##### Returns
+
+dict[str, Path] Dictionary mapping view names to their output file paths. Keys: "coronal", "axial", "sagittal".
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no output directory is available or invalid view name. TractographyVisualizationError If image generation fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer( ... reference_image="t1w.nii.gz", output_directory="output/" ... )
+> > >
+> > > #### Generate all views
+> > >
+> > > views = visualizer.generate_anatomical_views("tract.trk")
+> > >
+> > > #### Generate specific views
+> > >
+> > > views = visualizer.generate_anatomical_views( ... "tract.trk", views=["coronal", "axial"] ... )
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def generate_anatomical_views(
+    self,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] | None = None,
+    show_glass_brain: bool = True,
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Generate snapshots from standard anatomical views.
+
+    Creates static images from coronal, axial, and sagittal views of the tract.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the tractography file.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization or via `set_reference_image()`.
+    views : list[str] | None, optional
+        List of views to generate. Options: "coronal", "axial", "sagittal".
+        If None, generates all three views. Default is None.
+    output_dir : str | Path | None, optional
+        Output directory for generated images. If None, uses the output
+        directory set during initialization.
+    figure_size : tuple[int, int] | None, optional
+        Size of the output images in pixels. If None, uses the default
+        set during initialization (default: (800, 800)). Default is None.
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    overwrite : bool, optional
+        If True, regenerate images even when output files already exist.
+        Default is False.
+
+    Returns
+    -------
+    dict[str, Path]
+        Dictionary mapping view names to their output file paths.
+        Keys: "coronal", "axial", "sagittal".
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no output directory is available or invalid view name.
+    TractographyVisualizationError
+        If image generation fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(
+    ...     reference_image="t1w.nii.gz", output_directory="output/"
+    ... )
+    >>> # Generate all views
+    >>> views = visualizer.generate_anatomical_views("tract.trk")
+    >>> # Generate specific views
+    >>> views = visualizer.generate_anatomical_views(
+    ...     "tract.trk", views=["coronal", "axial"]
+    ... )
+    """
+    # Use instance default if figure_size not provided
+    if figure_size is None:
+        figure_size = self.figure_size
+
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    # Determine which views to generate and template space for camera (MNI vs RAS)
+    if views is None:
+        views_to_generate = list(ANATOMICAL_VIEW_NAMES)
+    else:
+        views_to_generate = views
+        invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
+        if invalid_views:
+            raise InvalidInputError(
+                f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
+            )
+    template_space: Literal["ras", "mni"] = "mni" if "MNI" in str(ref_img) else "ras"
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    tract_name = Path(tract_file).stem
+    generated_views: dict[str, Path] = {}
+
+    # Check if all output files already exist BEFORE loading tract
+    # This prevents unnecessary memory usage when files are already generated
+    all_files_exist = True
+    for view_name in views_to_generate:
+        output_image = output_dir / f"{tract_name}_{view_name}.png"
+        if output_image.exists() and not overwrite:
+            generated_views[view_name] = output_image
+            logger.debug("Skipping generation of %s (file already exists)", output_image)
+        else:
+            all_files_exist = False
+
+    # If all files exist, return early without loading tract
+    if all_files_exist:
+        return generated_views
+
+    try:
+        # Load tract only if we need to generate at least one view
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+        ref_img_obj = nib.load(str(ref_img))
+        tract_streamlines = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # Filter streamlines if requested (to avoid VTK segfaults)
+        tract_streamlines = self._downsample_streamlines(tract_streamlines)
+
+        # Check if streamlines are empty after filtering
+        if not tract_streamlines or len(tract_streamlines) == 0:
+            logger.warning(
+                "Tract has 0 streamlines after filtering. Skipping visualization for %s",
+                tract_file,
+            )
+            return {}
+
+        # Calculate colors based on streamline directions using utility function
+        streamline_colors = calculate_direction_colors(tract_streamlines)
+
+        # Get centroid using utility function
+        centroid = calculate_centroid(tract_streamlines)
+
+        # Log tract statistics for debugging
+        total_points = sum(len(sl) for sl in tract_streamlines)
+        avg_points = total_points / len(tract_streamlines) if tract_streamlines else 0
+        max_points = max(len(sl) for sl in tract_streamlines) if tract_streamlines else 0
+        logger.info(
+            "Tract statistics: %d streamlines, %d total points, "
+            "%.1f avg points/streamline, %d max points/streamline",
+            len(tract_streamlines),
+            total_points,
+            avg_points,
+            max_points,
+        )
+
+        # Warn if tract is very dense (high risk of std::bad_alloc or segfault)
+        if total_points > DENSE_TRACT_POINT_THRESHOLD:
+            logger.warning(
+                "Very dense tract detected (%d total points). "
+                "This may cause std::bad_alloc errors or segfaults due to memory fragmentation. "
+                "Consider: (1) resampling streamlines to reduce points, "
+                "(2) filtering with higher cci_threshold, (3) reducing image resolution, "
+                "(4) disabling glass brain (show_glass_brain=False).",
+                total_points,
+            )
+        if max_points > VERY_LONG_STREAMLINE_POINT_THRESHOLD:
+            logger.warning(
+                "Very long streamline detected (%d points). "
+                "VTK may need large contiguous memory allocation which can fail due to fragmentation. "
+                "Consider disabling glass brain (show_glass_brain=False) or reducing figure_size.",
+                max_points,
+            )
+        # Warn if tract is moderately large and might cause issues
+        if total_points > LARGE_TRACT_POINT_THRESHOLD:
+            logger.info(
+                "Large tract detected (%d total points). "
+                "If you experience segfaults during rendering, try: "
+                "(1) reducing figure_size to (400, 400) or smaller, "
+                "(2) disabling glass brain (show_glass_brain=False), "
+                "(3) filtering streamlines with higher cci_threshold.",
+                total_points,
+            )
+
+        # Clean up loaded objects that are no longer needed
+        del tract, ref_img_obj
+
+        # Generate each requested view
+        for view_name in views_to_generate:
+            output_image = output_dir / f"{tract_name}_{view_name}.png"
+
+            # Skip if file already exists (already added to generated_views above)
+            if output_image.exists() and not overwrite:
+                continue
+
+            # Check memory before creating VTK actor
+            estimated_memory = _estimate_actor_memory_mb(tract_streamlines, figure_size)
+            if not _check_memory_available(estimated_memory, safety_margin=0.3):
+                logger.warning(
+                    "Insufficient memory to create actor for view %s. Skipping.",
+                    view_name,
+                )
+                continue
+
+            # Create scene using helper method (can segfault in VTK)
+            logger.debug("Creating scene for view %s", view_name)
+            try:
+                scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+            except (RuntimeError, OSError, MemoryError):
+                # Catch VTK errors during scene creation
+                logger.exception(
+                    "Failed to create scene for view %s. "
+                    "This may indicate a VTK segfault or memory issue. "
+                    "Try reducing image resolution or disabling glass brain.",
+                    view_name,
+                )
+                continue
+            except Exception:
+                # Catch any other unexpected errors
+                logger.exception(
+                    "Unexpected error creating scene for view %s",
+                    view_name,
+                )
+                continue
+
+            logger.debug("Scene created successfully for view %s", view_name)
+
+            # Create actor with original streamlines using helper method
+            logger.debug("Creating streamline actor for view %s", view_name)
+            tract_actor = None
+            try:
+                tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
+                logger.debug("Streamline actor created, adding to scene")
+                scene.add(tract_actor)
+                logger.debug("Streamline actor added to scene successfully")
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed for view %s (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try reducing image resolution or filtering streamlines.",
+                        view_name,
+                        len(tract_streamlines),
+                        sum(len(sl) for sl in tract_streamlines),
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    if tract_actor is not None:
+                        del tract_actor
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Set camera position for anatomical view (no streamline rotation needed)
+            # Calculate bbox for camera distance using utility function
+            logger.debug("Calculating bbox and setting camera for view %s", view_name)
+            bbox_size = calculate_bbox_size(tract_streamlines)
+
+            # Use helper method to set camera
+            try:
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                    template_space=template_space,
+                )
+                logger.debug("Camera set successfully for view %s", view_name)
+            except (RuntimeError, OSError, MemoryError):
+                logger.exception(
+                    "Failed to set camera for view %s. Skipping view.",
+                    view_name,
+                )
+                # Clean up and skip this view
+                scene.clear()
+                if tract_actor is not None:
+                    del tract_actor
+                del scene
+                gc.collect()
+                continue
+
+            # Record the scene (this can also fail with std::bad_alloc or segfault)
+            # Force aggressive memory cleanup before recording to reduce fragmentation
+            logger.debug("Recording scene for view %s", view_name)
+            logger.debug(
+                "Before recording: tract has %d streamlines, %d total points, image size=%dx%d",
+                len(tract_streamlines),
+                sum(len(sl) for sl in tract_streamlines),
+                figure_size[0],
+                figure_size[1],
+            )
+            # Aggressive cleanup before recording to reduce memory pressure
+            gc.collect()
+            gc.collect()  # Multiple passes for circular references
+
+            try:
+                window.record(
+                    scene=scene,  # noqa: F821
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                logger.debug("Scene recorded successfully for view %s", view_name)
+                generated_views[view_name] = output_image
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors during rendering
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        view_name,
+                        len(tract_streamlines),
+                        sum(len(sl) for sl in tract_streamlines),
+                    )
+                    # Clean up and skip this view
+                    scene.clear()  # noqa: F821
+                    if tract_actor is not None:
+                        del tract_actor
+                    del scene  # noqa: F821
+                    gc.collect()
+                    continue
+                raise
+
+            # Explicitly clean up scene and actors to free memory
+            # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+            scene.clear()  # noqa: F821
+            if tract_actor is not None:
+                del tract_actor
+            del scene  # noqa: F821
+
+            # Force garbage collection between views to free memory
+            # This is critical for large tractograms to prevent OOM kills
+            gc.collect()
+
+        # Clean up remaining large objects
+        del tract_streamlines, streamline_colors
+        gc.collect()
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to generate anatomical views: {e}",
+        ) from e
+    else:
+        return generated_views
+```
+
+### generate_atlas_views
+
+```
+generate_atlas_views(
+    atlas_file: str | Path,
+    *,
+    atlas_ref_img: str | Path | None = None,
+    ref_img: str | Path | None = None,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    atlas_name: str | None = None,
+    overwrite: bool = False,
+    atlas_threshold: float = 10.0,
+    template_space: Literal["ras", "mni"] | None = None,
+) -> dict[str, Path]
+```
+
+Generate anatomical views for an atlas tract or NIfTI ROI.
+
+Creates static images from coronal, axial, and sagittal views of the atlas. Supports two formats:
+
+- **TRK**: Atlas tractography file (streamlines). Rendered as 3D lines.
+- **NIfTI** (`.nii` / `.nii.gz`): Label or binary ROI volume. Rendered as a surface contour via `actor.contour_from_roi`.
+
+This is useful for comparing subject tracts to atlas tracts using the same viewing angles.
+
+##### Parameters
+
+atlas_file : str | Path Path to the atlas file: tractography (`.trk`) or NIfTI ROI (`.nii` / `.nii.gz`). atlas_ref_img : str | Path | None, optional Path to the reference image that matches the atlas coordinate space (e.g., MNI template if atlas is in MNI space). This is important if the atlas is in a different space (e.g., MNI) than the subject reference image. views : list[str] | None, optional List of views to generate. Options: "coronal", "axial", "sagittal". If None, generates all three views. Default is None. output_dir : str | Path | None, optional Output directory for generated images. If None, uses the output directory set during initialization. figure_size : tuple[int, int], optional Size of the output images in pixels. Default is (800, 800). show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. atlas_name : str | None, optional Name prefix for output files. If None, uses the stem of atlas_file. Default is None. overwrite : bool, optional If True, regenerate images even when output files already exist. Default is False. mask_atlas_roi_to_brain : bool, optional For NIfTI atlases only: if True, restrict the ROI to voxels inside the brain (reference image above threshold) so the contour does not extend outside the brain. Ignored for TRK atlases. Default is True. atlas_roi_brain_threshold : float | None, optional For NIfTI atlases only: threshold for the reference image to define the brain mask (voxels with ref > threshold are inside the brain). If None, uses the 5th percentile of nonzero reference voxels to exclude background. Ignored for TRK atlases or if `mask_atlas_roi_to_brain` is False. atlas_roi_smooth_sigma : float, optional For NIfTI atlases only: sigma (voxels) for Gaussian smoothing of the ROI before rendering the contour. Reduces pixelation; 0 disables. Default is 1.0. Ignored for TRK atlases. template_space : {"ras", "mni"} or None, optional Camera convention for anatomical views. Use `"mni"` for template/standard space (e.g. MNI, Talairach) so left/right match radiological convention; use `"ras"` for native RAS. If None, inferred from atlas file and reference image paths (e.g. "MNI", "talairach", "tpl-", "space-mni"). Pass explicitly when your template-aligned files do not include these in the path. Default is None.
+
+##### Returns
+
+dict[str, Path] Dictionary mapping view names to their output file paths. Keys: "coronal", "axial", "sagittal".
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no output directory is available or invalid view name. TractographyVisualizationError If image generation fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer( ... reference_image="t1w.nii.gz", output_directory="output/" ... )
+> > >
+> > > #### Generate all atlas views (TRK streamlines)
+> > >
+> > > atlas_views = visualizer.generate_atlas_views("atlas_tract.trk")
+> > >
+> > > #### NIfTI ROI atlas (rendered as contour surface)
+> > >
+> > > atlas_views = visualizer.generate_atlas_views("atlas_roi.nii.gz")
+> > >
+> > > #### Generate specific views
+> > >
+> > > atlas_views = visualizer.generate_atlas_views( ... "atlas_tract.trk", views=["coronal", "axial"] ... )
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def generate_atlas_views(
+    self,
+    atlas_file: str | Path,
+    *,
+    atlas_ref_img: str | Path | None = None,
+    ref_img: str | Path | None = None,  # Alias for atlas_ref_img
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    atlas_name: str | None = None,
+    overwrite: bool = False,
+    atlas_threshold: float = 10.0,
+    template_space: Literal["ras", "mni"] | None = None,
+) -> dict[str, Path]:
+    """Generate anatomical views for an atlas tract or NIfTI ROI.
+
+    Creates static images from coronal, axial, and sagittal views of the atlas.
+    Supports two formats:
+    - **TRK**: Atlas tractography file (streamlines). Rendered as 3D lines.
+    - **NIfTI** (``.nii`` / ``.nii.gz``): Label or binary ROI volume. Rendered
+      as a surface contour via ``actor.contour_from_roi``.
+
+    This is useful for comparing subject tracts to atlas tracts using
+    the same viewing angles.
+
+    Parameters
+    ----------
+    atlas_file : str | Path
+        Path to the atlas file: tractography (``.trk``) or NIfTI ROI (``.nii`` / ``.nii.gz``).
+    atlas_ref_img : str | Path | None, optional
+        Path to the reference image that matches the atlas coordinate space
+        (e.g., MNI template if atlas is in MNI space).
+        This is important if the atlas is in a different space (e.g., MNI)
+        than the subject reference image.
+    views : list[str] | None, optional
+        List of views to generate. Options: "coronal", "axial", "sagittal".
+        If None, generates all three views. Default is None.
+    output_dir : str | Path | None, optional
+        Output directory for generated images. If None, uses the output
+        directory set during initialization.
+    figure_size : tuple[int, int], optional
+        Size of the output images in pixels. Default is (800, 800).
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    atlas_name : str | None, optional
+        Name prefix for output files. If None, uses the stem of atlas_file.
+        Default is None.
+    overwrite : bool, optional
+        If True, regenerate images even when output files already exist.
+        Default is False.
+    mask_atlas_roi_to_brain : bool, optional
+        For NIfTI atlases only: if True, restrict the ROI to voxels inside
+        the brain (reference image above threshold) so the contour does not
+        extend outside the brain. Ignored for TRK atlases. Default is True.
+    atlas_roi_brain_threshold : float | None, optional
+        For NIfTI atlases only: threshold for the reference image to define
+        the brain mask (voxels with ref > threshold are inside the brain).
+        If None, uses the 5th percentile of nonzero reference voxels to
+        exclude background. Ignored for TRK atlases or if
+        ``mask_atlas_roi_to_brain`` is False.
+    atlas_roi_smooth_sigma : float, optional
+        For NIfTI atlases only: sigma (voxels) for Gaussian smoothing of the
+        ROI before rendering the contour. Reduces pixelation; 0 disables.
+        Default is 1.0. Ignored for TRK atlases.
+    template_space : {"ras", "mni"} or None, optional
+        Camera convention for anatomical views. Use ``"mni"`` for
+        template/standard space (e.g. MNI, Talairach) so left/right match
+        radiological convention; use ``"ras"`` for native RAS. If None,
+        inferred from atlas file and reference image paths (e.g. "MNI",
+        "talairach", "tpl-", "space-mni"). Pass explicitly when your
+        template-aligned files do not include these in the path.
+        Default is None.
+
+    Returns
+    -------
+    dict[str, Path]
+        Dictionary mapping view names to their output file paths.
+        Keys: "coronal", "axial", "sagittal".
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no output directory is available or invalid view name.
+    TractographyVisualizationError
+        If image generation fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(
+    ...     reference_image="t1w.nii.gz", output_directory="output/"
+    ... )
+    >>> # Generate all atlas views (TRK streamlines)
+    >>> atlas_views = visualizer.generate_atlas_views("atlas_tract.trk")
+    >>> # NIfTI ROI atlas (rendered as contour surface)
+    >>> atlas_views = visualizer.generate_atlas_views("atlas_roi.nii.gz")
+    >>> # Generate specific views
+    >>> atlas_views = visualizer.generate_atlas_views(
+    ...     "atlas_tract.trk", views=["coronal", "axial"]
+    ... )
+    """
+    # Determine reference image for atlas coordinate transformation
+    # If atlas is in different space (e.g., MNI), use atlas_ref_img
+    # Support both atlas_ref_img and ref_img (alias) for backward compatibility
+    if atlas_ref_img is None and ref_img is not None:
+        atlas_ref_img = ref_img
+    atlas_ref_img = self._reference_image if atlas_ref_img is None else Path(atlas_ref_img)
+    if template_space is None:
+        if atlas_ref_img is not None:
+            template_space = infer_template_space_from_paths(atlas_ref_img, atlas_file)
+        else:
+            template_space = "ras"
+
+    # Determine which views to generate
+    if views is None:
+        views_to_generate = list(ANATOMICAL_VIEW_NAMES)
+    else:
+        views_to_generate = views
+        invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
+        if invalid_views:
+            raise InvalidInputError(
+                f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
+            )
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use provided atlas_name or derive from file
+    atlas_name = Path(atlas_file).stem if atlas_name is None else str(atlas_name)
+
+    generated_views: dict[str, Path] = {}
+
+    # Check if all output files already exist BEFORE loading atlas tract
+    # This prevents unnecessary memory usage when files are already generated
+    all_files_exist = True
+    for view_name in views_to_generate:
+        output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
+        if output_image.exists() and not overwrite:
+            generated_views[view_name] = output_image
+            logger.debug("Skipping generation of %s (file already exists)", output_image)
+        else:
+            all_files_exist = False
+
+    # If all files exist, return early without loading atlas tract
+    if all_files_exist:
+        return generated_views
+
+    try:
+        if _is_nifti_atlas(atlas_file):
+            if atlas_ref_img is None:
+                raise InvalidInputError(
+                    "Reference image is required for NIfTI atlas views. "
+                    "Set it via constructor, set_reference_image(), or pass atlas_ref_img=.",
+                )
+            # NIfTI atlas: use ROI contour for visualization
+            roi_data = _prepare_atlas_roi_for_views(
+                atlas_file,
+                atlas_ref_img,
+                atlas_threshold=atlas_threshold,
+            )
+            atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+            # Nibabel image types have .affine; cast for type checker (load returns FileBasedImage)
+            ref_affine = cast("np.ndarray", cast("Any", atlas_ref_img_obj).affine)
+            # Centroid and bbox for camera: use ref affine to convert ROI voxels to world
+            roi_voxels = np.argwhere(roi_data > _ROI_BINARY_THRESHOLD)
+            if roi_voxels.size > 0:
+                vox_centers = roi_voxels.astype(np.float64) + 0.5
+                world_pts = apply_affine(ref_affine, vox_centers)
+                centroid = np.mean(world_pts, axis=0)
+                bbox_size = np.ptp(world_pts, axis=0)
+            else:
+                # Fallback: center of volume and diagonal extent
+                shape = np.array(roi_data.shape, dtype=np.float64)
+                centroid = apply_affine(ref_affine, (shape - 1) / 2)
+                bbox_size = np.abs(np.diag(ref_affine)[:3]) * shape
+
+            atlas_roi_color = (0.0, 1.0, 1.0)
+            atlas_roi_opacity = 0.1
+            for view_name in views_to_generate:
+                output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
+                if output_image.exists() and not overwrite:
+                    continue
+                scene, _ = self._create_scene(
+                    ref_img=atlas_ref_img,
+                    show_glass_brain=show_glass_brain,
+                )
+                try:
+                    roi_actor = actor.contour_from_roi(
+                        roi_data,
+                        color=atlas_roi_color,
+                        opacity=atlas_roi_opacity,
+                    )
+                    scene.add(roi_actor)
+                except (TypeError, RuntimeError) as e:
+                    error_msg = str(e).lower()
+                    if "affine" in error_msg or "bad_alloc" in error_msg:
+                        logger.exception(
+                            "Failed to create atlas ROI contour for view %s",
+                            view_name,
+                        )
+                        scene.clear()
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                    template_space=template_space,
+                )
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during atlas ROI rendering for view %s",
+                            view_name,
+                        )
+                        scene.clear()
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
+                scene.clear()
+                del roi_actor
+                del scene
+                gc.collect()
+        else:
+            # TRK atlas: use streamlines for visualization
+            # Load atlas tract only if we need to generate at least one view
+            atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+            atlas_tract.to_rasmm()
+
+            # Load reference image
+            atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+
+            # Transform atlas streamlines to visualization reference space
+            # The atlas tract is already in RASMM after to_rasmm(), so we transform
+            # directly to the visualization reference space
+            atlas_streamlines = transform_streamlines(
+                atlas_tract.streamlines,
+                np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+            )
+
+            # Filter streamlines if requested (to avoid VTK segfaults)
+            atlas_streamlines = self._downsample_streamlines(
+                atlas_streamlines,
+                approx_points=0.25,
+            )
+
+            # Check if streamlines are empty after filtering
+            if not atlas_streamlines or len(atlas_streamlines) == 0:
+                logger.warning(
+                    "Atlas tract has 0 streamlines after filtering. Skipping visualization for %s",
+                    atlas_file,
+                )
+                return {}
+
+            # Calculate colors based on streamline directions using utility function
+            streamline_colors = calculate_direction_colors(atlas_streamlines)
+
+            # Get centroid using utility function (recalculate after any transformations)
+            centroid = calculate_centroid(atlas_streamlines)
+
+            # Generate each requested view
+            for view_name in views_to_generate:
+                output_image = output_dir / f"{atlas_name}_atlas_{view_name}.png"
+
+                # Skip if file already exists (already added to generated_views above)
+                if output_image.exists() and not overwrite:
+                    continue
+
+                # Create scene using helper method
+                scene, _ = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
+
+                # Create actor with original streamlines using helper method
+                try:
+                    tract_actor = self._create_streamline_actor(atlas_streamlines, streamline_colors)
+                    scene.add(tract_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        total_points = sum(len(sl) for sl in atlas_streamlines)
+                        logger.exception(
+                            "VTK memory allocation failed for atlas comparison view %s (likely std::bad_alloc). "
+                            "Atlas has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(atlas_streamlines),
+                            total_points,
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
+
+                # Set camera position for anatomical view using utility function
+                bbox_size = calculate_bbox_size(atlas_streamlines)
+
+                # Use helper method to set camera
+                self._set_anatomical_camera(
+                    scene,
+                    centroid,
+                    view_name,
+                    bbox_size=bbox_size,
+                    template_space=template_space,
+                )
+
+                # Record the scene (this can also fail with std::bad_alloc)
+                try:
+                    window.record(
+                        scene=scene,
+                        out_path=str(output_image),
+                        size=figure_size,
+                    )
+                    generated_views[view_name] = output_image
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors during rendering
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.exception(
+                            "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                            "Tract has %d streamlines with %d total points. "
+                            "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                            view_name,
+                            len(atlas_streamlines),
+                            sum(len(sl) for sl in atlas_streamlines),
+                        )
+                        # Clean up and skip this view
+                        scene.clear()
+                        del tract_actor
+                        del scene
+                        gc.collect()
+                        continue
+                    raise
+
+                # Explicitly clean up scene and actors to free memory
+                # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+                scene.clear()
+                del tract_actor
+                del scene
+
+                # Force garbage collection between views to free memory
+                # This is critical for large tractograms to prevent OOM kills
+                gc.collect()
+
+            # Clean up large objects after all views are generated
+            del atlas_tract, atlas_ref_img_obj, atlas_streamlines, streamline_colors
+            gc.collect()
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to generate atlas views: {e}",
+        ) from e
+    else:
+        return generated_views
+```
+
+### generate_gif
+
+```
+generate_gif(
+    name: str,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    ref_file: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    overwrite: bool = False,
+    max_streamlines: int | None = None,
+    subsample_factor: float | None = None,
+    max_points_per_streamline: int | None = None,
+    resample_streamlines: bool = False,
+) -> Path
+```
+
+Generate a GIF animation of rotating tractography.
+
+##### Parameters
+
+name : str Base name for the output GIF file (without extension). tract_file : str | Path Path to the tractography file. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization. output_dir : str | Path | None, optional Output directory. If None, uses the output directory set during initialization or creates a default directory. overwrite : bool, optional If True, regenerate GIF even when output file already exists. Default is False.
+
+##### Returns
+
+Path Path to the generated GIF file.
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no output directory is available. TractographyVisualizationError If GIF generation fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def generate_gif(
+    self,
+    name: str,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    ref_file: str | Path | None = None,  # Alias for ref_img
+    output_dir: str | Path | None = None,
+    overwrite: bool = False,
+    max_streamlines: int | None = None,  # noqa: ARG002
+    subsample_factor: float | None = None,  # noqa: ARG002
+    max_points_per_streamline: int | None = None,  # noqa: ARG002
+    resample_streamlines: bool = False,  # noqa: ARG002
+) -> Path:
+    """Generate a GIF animation of rotating tractography.
+
+    Parameters
+    ----------
+    name : str
+        Base name for the output GIF file (without extension).
+    tract_file : str | Path
+        Path to the tractography file.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization.
+    output_dir : str | Path | None, optional
+        Output directory. If None, uses the output directory set during
+        initialization or creates a default directory.
+    overwrite : bool, optional
+        If True, regenerate GIF even when output file already exists.
+        Default is False.
+
+    Returns
+    -------
+    Path
+        Path to the generated GIF file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no output directory is available.
+    TractographyVisualizationError
+        If GIF generation fails.
+    """
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    gif_filename = output_dir / f"{name}.gif"
+
+    # Skip if file already exists
+    if gif_filename.exists() and not overwrite:
+        logger.debug("Skipping generation of %s (file already exists)", gif_filename)
+        return gif_filename
+
+    # Support both ref_img and ref_file (alias) for backward compatibility
+    if ref_img is None and ref_file is not None:
+        ref_img = ref_file
+
+    try:
+        # Load tract and get streamlines for rotation
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+        ref_img_obj = nib.load(str(ref_img))
+        tract_streamlines = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # Downsample points (to avoid VTK segfaults)
+        tract_streamlines = self._downsample_streamlines(tract_streamlines)
+
+        # Create initial actors with error handling for std::bad_alloc
+        try:
+            tract_actor = actor.line(tract_streamlines)
+        except RuntimeError as e:
+            # Catch std::bad_alloc and other VTK errors
+            error_msg = str(e).lower()
+            if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                total_points = sum(len(sl) for sl in tract_streamlines)
+                logger.exception(
+                    "VTK memory allocation failed when creating initial actor for GIF (likely std::bad_alloc). "
+                    "Tract has %d streamlines with %d total points. "
+                    "Try filtering streamlines, reducing gif_size, or using n_jobs=1.",
+                    len(tract_streamlines),
+                    total_points,
+                )
+                raise TractographyVisualizationError(
+                    f"Failed to create actor for GIF: {e}. "
+                    "Try reducing tract size, gif_size, or processing with n_jobs=1.",
+                ) from e
+            raise
+        brain_actor = self.get_glass_brain(ref_img)
+        scene = window.Scene()
+        scene.add(brain_actor)
+        scene.add(tract_actor)
+        scene.setBackground(color=(1, 1, 1))
+
+        angles = np.linspace(0, 360, self.gif_frames, endpoint=False)
+        rotation_axis = np.array([0, 0, 1])  # Rotate around Z-axis
+        rotation_center = np.array([0, 0, 0])
+        gif_frames = []
+
+        for angle in angles:
+            rot_matrix = Rotation.from_rotvec(
+                angle * np.pi / 180 * rotation_axis,
+            ).as_matrix()
+
+            # Rotate streamlines around the origin
+            rotated_streamlines = [
+                np.dot(s - rotation_center, rot_matrix.T) + rotation_center for s in tract_streamlines
+            ]
+            # Create actor for rotated streamlines with error handling
+            try:
+                stream_actor = actor.line(rotated_streamlines)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.warning(
+                        "VTK memory allocation failed when creating rotated actor for GIF frame at angle %.1f° (likely std::bad_alloc). "
+                        "Skipping this frame. Try filtering streamlines, reducing gif_size, or using n_jobs=1.",
+                        angle,
+                    )
+                    # Clean up and skip this frame
+                    del rotated_streamlines
+                    gc.collect()
+                    continue
+                raise
+
+            # Convert to 4x4 transformation matrix
+            transform_matrix = np.eye(4)
+            transform_matrix[:3, :3] = rot_matrix
+            transform_matrix[:3, 3] = rotation_center - np.dot(
+                rot_matrix,
+                rotation_center,
+            )
+
+            # Rotate glass brain using VTK transform
+            transform = vtk.vtkTransform()
+            transform.Concatenate(transform_matrix.flatten())
+
+            brain_actor.SetUserTransform(transform)
+
+            # Clear scene and re-add actors
+            scene.clear()
+            scene.add(stream_actor)
+            scene.add(brain_actor)
+
+            # Snapshot can also fail with std::bad_alloc
+            try:
+                frame = window.snapshot(scene, size=self.gif_size)
+                gif_frames.append(frame)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors during snapshot
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed during GIF frame snapshot (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try reducing gif_size or processing with n_jobs=1.",
+                        len(tract_streamlines),
+                        sum(len(sl) for sl in tract_streamlines),
+                    )
+                    # Clean up and break out of loop
+                    scene.clear()
+                    del stream_actor, rotated_streamlines
+                    gc.collect()
+                    # If we have some frames, save what we have
+                    if gif_frames:
+                        logger.warning("Saving partial GIF with %d frames", len(gif_frames))
+                    else:
+                        # No frames captured, skip this view
+                        del gif_frames, tract_actor, brain_actor, scene
+                        gc.collect()
+                        continue
+                raise
+
+            # Force memory cleanup
+            del stream_actor, rotated_streamlines
+            gc.collect()
+
+        # Explicitly clean up scene and actors after all frames are captured
+        # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+        scene.clear()
+        del tract_actor, brain_actor, scene
+        del tract, tract_streamlines, ref_img_obj
+
+        # Force garbage collection to free memory
+        # This is critical for large tractograms to prevent OOM kills
+        gc.collect()
+
+        # Save as optimized GIF
+        imageio.mimsave(
+            str(gif_filename),
+            gif_frames,
+            duration=self.gif_duration,
+            palettesize=self.gif_palette_size,
+        )
+
+        # Clean up frames after saving
+        del gif_frames
+        gc.collect()
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to generate GIF: {e}",
+        ) from e
+    else:
+        return gif_filename
+```
+
+### generate_videos
+
+```
+generate_videos(
+    tract_files: list[str | Path],
+    ref_img: str | Path | None = None,
+    *,
+    ref_file: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    remove_gifs: bool = True,
+    overwrite: bool = False,
+    max_streamlines: int | None = None,
+    subsample_factor: float | None = None,
+    max_points_per_streamline: int | None = None,
+    resample_streamlines: bool = False,
+) -> dict[str, Path]
+```
+
+Generate MP4 videos from multiple tractography files.
+
+##### Parameters
+
+tract_files : list[str | Path] List of paths to tractography files. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization. output_dir : str | Path | None, optional Output directory. If None, uses the output directory set during initialization. remove_gifs : bool, optional Whether to remove intermediate GIF files. Default is True. overwrite : bool, optional If True, regenerate videos even when output files already exist. Default is False. max_streamlines : int | None, optional Passed through to :meth:`generate_gif`. Maximum streamlines per tract. subsample_factor : float | None, optional Passed through to :meth:`generate_gif`. Fraction of streamlines to keep. max_points_per_streamline : int | None, optional Passed through to :meth:`generate_gif`. Max points per streamline. resample_streamlines : bool, optional Passed through to :meth:`generate_gif`. Whether to resample streamlines.
+
+##### Returns
+
+dict[str, Path] Dictionary mapping tract names to their MP4 file paths.
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If the tract_files list is empty. TractographyVisualizationError If video generation fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def generate_videos(
+    self,
+    tract_files: list[str | Path],
+    ref_img: str | Path | None = None,
+    *,
+    ref_file: str | Path | None = None,  # Alias for ref_img
+    output_dir: str | Path | None = None,
+    remove_gifs: bool = True,
+    overwrite: bool = False,
+    max_streamlines: int | None = None,
+    subsample_factor: float | None = None,
+    max_points_per_streamline: int | None = None,
+    resample_streamlines: bool = False,
+) -> dict[str, Path]:
+    """Generate MP4 videos from multiple tractography files.
+
+    Parameters
+    ----------
+    tract_files : list[str | Path]
+        List of paths to tractography files.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization.
+    output_dir : str | Path | None, optional
+        Output directory. If None, uses the output directory set during
+        initialization.
+    remove_gifs : bool, optional
+        Whether to remove intermediate GIF files. Default is True.
+    overwrite : bool, optional
+        If True, regenerate videos even when output files already exist.
+        Default is False.
+    max_streamlines : int | None, optional
+        Passed through to :meth:`generate_gif`. Maximum streamlines per tract.
+    subsample_factor : float | None, optional
+        Passed through to :meth:`generate_gif`. Fraction of streamlines to keep.
+    max_points_per_streamline : int | None, optional
+        Passed through to :meth:`generate_gif`. Max points per streamline.
+    resample_streamlines : bool, optional
+        Passed through to :meth:`generate_gif`. Whether to resample streamlines.
+
+    Returns
+    -------
+    dict[str, Path]
+        Dictionary mapping tract names to their MP4 file paths.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If the tract_files list is empty.
+    TractographyVisualizationError
+        If video generation fails.
+    """
+    if not tract_files:
+        raise InvalidInputError("No tract files provided.")
+
+    # Support both ref_img and ref_file (alias) for backward compatibility
+    if ref_img is None and ref_file is not None:
+        ref_img = ref_file
+
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    tract_videos: dict[str, Path] = {}
+
+    for tract_file in tract_files:
+        try:
+            tract_path = Path(tract_file)
+            tract_name = tract_path.stem
+            tract_mp4 = output_dir / f"{tract_name}.mp4"
+
+            # Skip if MP4 already exists
+            if tract_mp4.exists() and not overwrite:
+                logger.debug("Skipping generation of %s (file already exists)", tract_mp4)
+                tract_videos[tract_name] = tract_mp4
+                continue
+
+            tract_gif = self.generate_gif(
+                name=tract_name,
+                tract_file=tract_path,
+                ref_img=ref_img,
+                output_dir=output_dir,
+                max_streamlines=max_streamlines,
+                subsample_factor=subsample_factor,
+                max_points_per_streamline=max_points_per_streamline,
+                resample_streamlines=resample_streamlines,
+                overwrite=overwrite,
+            )
+            self.convert_gif_to_mp4(tract_gif, tract_mp4, overwrite=overwrite)
+
+            if remove_gifs:
+                tract_gif.unlink()
+
+            tract_videos[tract_name] = tract_mp4
+        except (OSError, ValueError, RuntimeError) as e:
+            raise TractographyVisualizationError(
+                f"Failed to generate video for {tract_file}: {e}",
+            ) from e
+
+    return tract_videos
+```
+
+### get_glass_brain
+
+```
+get_glass_brain(t1w_img: str | Path | None = None) -> Actor
+```
+
+Get the glass brain actor for the T1-weighted image.
+
+##### Parameters
+
+t1w_img : str | Path | None, optional Path to the T1-weighted image. If None, uses the reference image set during initialization or via `set_reference_image()`.
+
+##### Returns
+
+actor.Actor The glass brain actor.
+
+##### Raises
+
+FileNotFoundError If the image file is not found. InvalidInputError If no reference image is provided and none was set.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def get_glass_brain(self, t1w_img: str | Path | None = None) -> actor.Actor:
+    """Get the glass brain actor for the T1-weighted image.
+
+    Parameters
+    ----------
+    t1w_img : str | Path | None, optional
+        Path to the T1-weighted image. If None, uses the reference image
+        set during initialization or via `set_reference_image()`.
+
+    Returns
+    -------
+    actor.Actor
+        The glass brain actor.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the image file is not found.
+    InvalidInputError
+        If no reference image is provided and none was set.
+    """
+    if t1w_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        t1w_img = self._reference_image
+
+    try:
+        mask_img = nib.load(str(t1w_img))
+        mask_data = mask_img.get_fdata()  # type: ignore[attr-defined]
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to load glass brain from {t1w_img}: {e}",
+        ) from e
+    else:
+        return actor.contour_from_roi(mask_data, color=[0, 0, 0], opacity=0.05)
+```
+
+### load_tract
+
+```
+load_tract(
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+) -> Actor
+```
+
+Load the tractography file and create an actor.
+
+##### Parameters
+
+tract_file : str | Path Path to the tractography file (.trk). ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization or via `set_reference_image()`.
+
+##### Returns
+
+actor.Actor The tractography actor.
+
+##### Raises
+
+FileNotFoundError If the tract or reference image file is not found. InvalidInputError If no reference image is provided and none was set. TractographyVisualizationError If loading or transformation fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def load_tract(
+    self,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+) -> actor.Actor:
+    """Load the tractography file and create an actor.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the tractography file (.trk).
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization or via `set_reference_image()`.
+
+    Returns
+    -------
+    actor.Actor
+        The tractography actor.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the tract or reference image file is not found.
+    InvalidInputError
+        If no reference image is provided and none was set.
+    TractographyVisualizationError
+        If loading or transformation fails.
+    """
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+
+    try:
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+        ref_img_obj = nib.load(str(ref_img))
+        tract_to_ref = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+        )
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to load tract from {tract_file}: {e}",
+        ) from e
+    else:
+        try:
+            return actor.line(tract_to_ref)
+        except RuntimeError as e:
+            # Catch std::bad_alloc and other VTK errors
+            error_msg = str(e).lower()
+            if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                total_points = sum(len(sl) for sl in tract_to_ref)
+                logger.exception(
+                    "VTK memory allocation failed in load_tract (likely std::bad_alloc). "
+                    "Tract has %d streamlines with %d total points. "
+                    "Try filtering streamlines or using n_jobs=1.",
+                    len(tract_to_ref),
+                    total_points,
+                )
+            raise TractographyVisualizationError(
+                f"Failed to create actor from tract: {e}. Try filtering streamlines or processing with n_jobs=1.",
+            ) from e
+```
+
+### plot_afq
+
+```
+plot_afq(
+    metric_file: str | Path,
+    metric_str: str,
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    colormap: str = "Spectral",
+    overwrite: bool = False,
+) -> dict[str, Path]
+```
+
+Plot AFQ profile with anatomical views.
+
+Generates anatomical views (coronal, axial, sagittal) with streamlines colored by AFQ profile values.
+
+##### Parameters
+
+metric_file : str | Path Path to the metric image file. metric_str : str Name of the metric (e.g., "FA", "MD") for labeling. tract_file : str | Path Path to the tractography file. atlas_file : str | Path Path to the atlas tractography file. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization. views : list[str] | None, optional List of views to generate. Options: "coronal", "axial", "sagittal". If None, generates all three views. Default is None. output_dir : str | Path | None, optional Output directory for generated images. If None, uses the output directory set during initialization. figure_size : tuple[int, int], optional Size of the output images in pixels. Default is (800, 800). show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. colormap : str, optional Name of the colormap to use for AFQ profile values. Default is "Spectral". overwrite : bool, optional If True, regenerate images even when output files already exist. Default is False.
+
+##### Returns
+
+dict[str, Path] Dictionary mapping view names to their output file paths. Also includes "profile_plot" key for the profile line plot.
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no output directory is available. TractographyVisualizationError If image generation fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def plot_afq(
+    self,
+    metric_file: str | Path,
+    metric_str: str,
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    colormap: str = "Spectral",
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Plot AFQ profile with anatomical views.
+
+    Generates anatomical views (coronal, axial, sagittal) with streamlines
+    colored by AFQ profile values.
+
+    Parameters
+    ----------
+    metric_file : str | Path
+        Path to the metric image file.
+    metric_str : str
+        Name of the metric (e.g., "FA", "MD") for labeling.
+    tract_file : str | Path
+        Path to the tractography file.
+    atlas_file : str | Path
+        Path to the atlas tractography file.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization.
+    views : list[str] | None, optional
+        List of views to generate. Options: "coronal", "axial", "sagittal".
+        If None, generates all three views. Default is None.
+    output_dir : str | Path | None, optional
+        Output directory for generated images. If None, uses the output
+        directory set during initialization.
+    figure_size : tuple[int, int], optional
+        Size of the output images in pixels. Default is (800, 800).
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    colormap : str, optional
+        Name of the colormap to use for AFQ profile values.
+        Default is "Spectral".
+    overwrite : bool, optional
+        If True, regenerate images even when output files already exist.
+        Default is False.
+
+    Returns
+    -------
+    dict[str, Path]
+        Dictionary mapping view names to their output file paths.
+        Also includes "profile_plot" key for the profile line plot.
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no output directory is available.
+    TractographyVisualizationError
+        If image generation fails.
+    """
+    # Calculate AFQ profile (this will raise InvalidInputError if tract is empty)
+    try:
+        profile = self.weighted_afq(tract_file, atlas_file, metric_file)
+    except InvalidInputError as e:
+        # If tract is empty, return empty dict instead of raising
+        if "empty" in str(e).lower() or "0 streamlines" in str(e).lower():
+            logger.warning(
+                "Skipping AFQ profile for %s: %s",
+                tract_file,
+                e,
+            )
+            return {}
+        raise
+
+    # Determine which views to generate
+    if views is None:
+        views_to_generate = list(ANATOMICAL_VIEW_NAMES)
+    else:
+        views_to_generate = views
+        invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
+        if invalid_views:
+            raise InvalidInputError(
+                f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
+            )
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    tract_name = Path(tract_file).stem
+    generated_views: dict[str, Path] = {}
+
+    # Check profile plot path
+    profile_plot_path = output_dir / f"{tract_name}_{metric_str}_profile.png"
+    if profile_plot_path.exists() and not overwrite:
+        logger.debug("Skipping generation of %s (file already exists)", profile_plot_path)
+    generated_views["profile_plot"] = profile_plot_path
+
+    # Check if all view files already exist BEFORE loading tract
+    # This prevents unnecessary memory usage when files are already generated
+    all_view_files_exist = True
+    for view_name in views_to_generate:
+        output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
+        if output_image.exists() and not overwrite:
+            generated_views[view_name] = output_image
+            logger.debug("Skipping generation of %s (file already exists)", output_image)
+        else:
+            all_view_files_exist = False
+
+    # If all view files exist and profile plot exists, return early without loading tract
+    if all_view_files_exist and profile_plot_path.exists() and not overwrite:
+        return generated_views
+
+    try:
+        # Load tract first to check if it's empty before calculating AFQ profile
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+
+        # Check if tract is empty before any processing
+        if not tract.streamlines or len(tract.streamlines) == 0:
+            logger.warning(
+                "Tract has 0 streamlines. Skipping AFQ profile calculation and visualization for %s",
+                tract_file,
+            )
+            return {}
+
+        tract.to_rasmm()
+        ref_img_obj = nib.load(str(ref_img))
+        tract_streamlines = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # Downsample points (to avoid VTK segfaults)
+        tract_streamlines = self._downsample_streamlines(tract_streamlines)
+
+        # Check if streamlines are empty after filtering
+        if not tract_streamlines or len(tract_streamlines) == 0:
+            logger.warning(
+                "Tract has 0 streamlines after filtering. Skipping visualization for %s",
+                tract_file,
+            )
+            return {}
+
+        # Calculate AFQ profile colors for each streamline
+        # Store per-point colors for each streamline
+        streamline_point_colors = []
+        for sl in tract_streamlines:
+            sl_array = np.array(sl)
+            # Interpolate profile values to match streamline points
+            interpolated_values = np.interp(
+                np.linspace(0, 1, len(sl_array)),
+                np.linspace(0, 1, len(profile)),
+                profile,
+            )
+            # Create colormap colors for each point
+            point_colors = create_colormap(interpolated_values, name=colormap)
+            streamline_point_colors.append(point_colors)
+
+        # Get centroid using utility function
+        centroid = calculate_centroid(tract_streamlines)
+
+        # Generate each requested view
+        for view_name in views_to_generate:
+            output_image = output_dir / f"{tract_name}_{metric_str}_{view_name}.png"
+
+            # Skip if file already exists (already added to generated_views above)
+            if output_image.exists() and not overwrite:
+                continue
+
+            # Create scene using helper method
+            scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+            # Create actors with AFQ profile colors using original streamlines
+            # Colors are already calculated per point, so we can use them directly
+            for _i, (sl, point_colors) in enumerate(
+                zip(tract_streamlines, streamline_point_colors),
+            ):
+                try:
+                    line_actor = actor.line([sl], colors=point_colors)
+                    scene.add(line_actor)
+                except RuntimeError as e:
+                    # Catch std::bad_alloc and other VTK errors
+                    error_msg = str(e).lower()
+                    if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                        logger.warning(
+                            "VTK memory allocation failed for AFQ profile streamline %d/%d (likely std::bad_alloc). "
+                            "Skipping this streamline. Try reducing image resolution or filtering streamlines.",
+                            _i + 1,
+                            len(tract_streamlines),
+                        )
+                        continue
+                    raise
+
+            # Set camera position for anatomical view using utility function
+            bbox_size = calculate_bbox_size(tract_streamlines)
+
+            # Use helper method to set camera
+            self._set_anatomical_camera(
+                scene,
+                centroid,
+                view_name,
+                bbox_size=bbox_size,
+            )
+
+            # Record the scene (this can also fail with std::bad_alloc)
+            try:
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                generated_views[view_name] = output_image
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors during rendering
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        view_name,
+                        len(tract_streamlines),
+                        sum(len(sl) for sl in tract_streamlines),
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Explicitly clean up scene to free memory
+            # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+            scene.clear()
+            del scene
+
+            # Force garbage collection between views to free memory
+            # This is critical for large tractograms to prevent OOM kills
+            gc.collect()
+
+        # Also create the profile line plot (if it doesn't already exist or overwrite)
+        if not profile_plot_path.exists() or overwrite:
+            fig, ax = plt.subplots(1, figsize=(8, 6))
+            ax.plot(profile)
+            ax.set_xlabel("Node along tract")
+            ax.set_ylabel(metric_str)
+            ax.set_title(f"AFQ Profile: {metric_str}")
+            ax.grid(visible=True, alpha=0.3)
+            fig.savefig(str(profile_plot_path), dpi=150, bbox_inches="tight")
+            plt.close(fig)
+        else:
+            logger.debug("Skipping generation of %s (file already exists)", profile_plot_path)
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to plot AFQ profile: {e}",
+        ) from e
+    else:
+        return generated_views
+```
+
+### run_quality_check_workflow
+
+```
+run_quality_check_workflow(
+    subjects_original_space: dict[
+        str, dict[str, str | Path]
+    ],
+    ref_img: str
+    | Path
+    | dict[str, str | Path]
+    | None = None,
+    *,
+    subjects_mni_space: dict[str, dict[str, str | Path]]
+    | None = None,
+    atlas_files: dict[str, str | Path] | None = None,
+    metric_files: dict[str, dict[str, str | Path]]
+    | None = None,
+    atlas_ref_img: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    html_output: str | Path | None = None,
+    skip_checks: list[str] | None = None,
+    n_jobs: int | None = None,
+    subject_kwargs: dict[str, Any] | None = None,
+    atlas_kwargs: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    **kwargs: Any,
+) -> dict[str, dict[str, dict[str, str | Path]]]
+```
+
+Run comprehensive quality checks for multiple subjects and tracts.
+
+This workflow function orchestrates all available quality check methods for each subject/tract combination and generates an HTML report.
+
+Different quality checks require tracts in different coordinate spaces:
+
+- **Original space** (subjects_original_space): Used for anatomical views, CCI calculations, before/after CCI comparison, and AFQ profiles (which need to align with subject-specific metric files).
+- **MNI/Atlas space** (subjects_mni_space): Used for shape similarity calculations and bundle assignment (which compare with atlas files).
+
+##### Parameters
+
+subjects_original_space : dict\[str, dict[str, str | Path]\] Dictionary mapping subject IDs to their tract files in original/native space. Format: {subject_id: {tract_name: tract_file_path}} Example: { "sub-001": { "AF_L": "path/to/sub-001_AF_L_original.trk", "AF_R": "path/to/sub-001_AF_R_original.trk" }, "sub-002": { "AF_L": "path/to/sub-002_AF_L_original.trk" } } Used for: anatomical views, CCI, before/after CCI, AFQ profiles. ref_img : str | Path | dict[str, str | Path] | None, optional Reference image(s) for subjects. Can be:
+
+- A single path (str | Path): Used for all subjects
+- A dictionary mapping subject IDs to reference images: {subject_id: ref_image_path}
+- None: Uses the reference image set during initialization or via `set_reference_image()` for all subjects Example for per-subject reference images: {"sub-001": "path/to/sub-001_t1w.nii.gz", "sub-002": "path/to/sub-002_t1w.nii.gz"} subjects_mni_space : dict\[str, dict[str, str | Path]\] | None, optional Dictionary mapping subject IDs to their tract files in MNI/atlas space. Format: {subject_id: {tract_name: tract_file_path}} Example: { "sub-001": { "AF_L": "path/to/sub-001_AF_L_mni.trk", "AF_R": "path/to/sub-001_AF_R_mni.trk" }, "sub-002": { "AF_L": "path/to/sub-002_AF_L_mni.trk" } } Used for: shape similarity, bundle assignment. If None, these checks will be skipped. atlas_files : dict[str, str | Path] | None, optional Dictionary mapping tract names to their corresponding atlas/model files. These files are shared across all subjects and used for:
+- Atlas comparison visualizations
+- Shape similarity calculations
+- AFQ profile calculations (as model files)
+- Bundle assignment visualizations (as model files) Format: {tract_name: atlas_file_path} Example: {"AF_L": "path/to/atlas_AF_L.trk", "AF_R": "path/to/atlas_AF_R.trk"} metric_files : dict\[str, dict[str, str | Path]\] | None, optional Dictionary mapping subject IDs to their metric files. All tracts within a subject will use the same metric files. Format: {subject_id: {metric_name: metric_file_path}} Example: { "sub-001": {"FA": "path/to/sub-001_FA.nii.gz", "MD": "path/to/sub-001_MD.nii.gz"}, "sub-002": {"FA": "path/to/sub-002_FA.nii.gz"} } If provided, AFQ profile calculations will be run for all tracts in each subject. atlas_ref_img : str | Path | None, optional Path to the reference image matching the atlas coordinate space (e.g., MNI template). Required if atlas files are in a different coordinate space than subject tracts. output_dir : str | Path | None, optional Output directory for generated files. If None, uses the output directory set during initialization. html_output : str | Path | None, optional Path for the HTML report file(s). Individual reports are generated per subject. Options:
+- None: Creates "{subject_id}\_quality_check_report.html" for each subject in the output directory.
+- Directory path: Creates "{subject_id}\_quality_check_report.html" for each subject in the specified directory.
+- File path: If the path contains "{subject}" or "{SUBJECT}" placeholder, it will be replaced with the subject ID. Otherwise, the subject ID will be prepended to the filename (e.g., "report.html" becomes "sub-001_report.html"). Example: "reports/{subject}\_qc.html" will create "reports/sub-001_qc.html", "reports/sub-002_qc.html", etc. skip_checks : list[str] | None, optional List of quality checks to skip. Valid options:
+- "anatomical_views": Skip standard anatomical views
+- "atlas_comparison": Skip atlas comparison views
+- "cci": Skip CCI calculation and visualization
+- "before_after_cci": Skip before/after CCI comparison
+- "afq_profile": Skip AFQ profile visualization
+- "bundle_assignment": Skip bundle assignment visualization
+- "shape_similarity": Skip shape similarity calculation and visualization n_jobs : int | None, optional Number of parallel jobs to run for processing multiple subjects/tracts. If None, uses the value set during initialization (default: 1). Use -1 to automatically determine optimal number based on available resources (respects SLURM allocations and OpenMP thread settings to prevent oversubscription). Only effective when processing multiple subjects/tracts. Default is None.
+
+```
+Note: When running under SLURM, -1 will automatically use
+SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
+it will divide the available CPUs by the number of OpenMP threads to
+prevent resource contention.
+```
+
+subject_kwargs : dict[str, Any] | None, optional Additional keyword arguments passed only to subject tract visualization methods (e.g., `generate_anatomical_views` for subject files). These kwargs are NOT passed to atlas visualization methods. Example: `{"max_streamlines": 500, "max_points_per_streamline": 100}` atlas_kwargs : dict[str, Any] | None, optional Additional keyword arguments passed only to atlas visualization methods (e.g., `generate_atlas_views`). These kwargs are NOT passed to subject visualization methods. If None, atlas methods use default parameters. overwrite : bool, optional If True, regenerate all images even when output files already exist. Passed to all quality check methods. Default is False. \*\*kwargs Additional keyword arguments passed to ALL quality check methods (both subject and atlas). Use `subject_kwargs` or `atlas_kwargs` to pass different parameters to subject vs atlas methods.
+
+##### Returns
+
+dict\[str, dict\[str, dict[str, str | Path]\]\] Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}} This structure is compatible with `create_quality_check_html()`.
+
+##### Raises
+
+InvalidInputError If required files are missing or invalid. TractographyVisualizationError If quality check workflow fails.
+
+##### Examples
+
+Single subject or all subjects share same reference image:
+
+> > > visualizer = TractographyVisualizer(output_directory="output/") subjects_original = { ... "sub-001": { ... "AF_L": "sub-001_AF_L_original.trk", ... "AF_R": "sub-001_AF_R_original.trk", ... } ... } results = visualizer.run_quality_check_workflow( ... subjects_original_space=subjects_original, ... ref_img="shared_t1w.nii.gz", # Single image for all subjects ... html_output="quality_report.html", ... )
+
+Multiple subjects with different reference images:
+
+> > > visualizer = TractographyVisualizer(output_directory="output/") subjects_original = { ... "sub-001": {"AF_L": "sub-001_AF_L_original.trk"}, ... "sub-002": {"AF_L": "sub-002_AF_L_original.trk"}, ... }
+> > >
+> > > #### Each subject has its own reference image
+> > >
+> > > ref_images = { ... "sub-001": "sub-001_t1w.nii.gz", ... "sub-002": "sub-002_t1w.nii.gz", ... } subjects_mni = { ... "sub-001": {"AF_L": "sub-001_AF_L_mni.trk"}, ... "sub-002": {"AF_L": "sub-002_AF_L_mni.trk"}, ... } atlas_files = {"AF_L": "atlas_AF_L.trk"} metric_files = { ... "sub-001": {"FA": "sub-001_FA.nii.gz"}, ... "sub-002": {"FA": "sub-002_FA.nii.gz"}, ... } results = visualizer.run_quality_check_workflow( ... subjects_original_space=subjects_original, ... ref_img=ref_images, # Dictionary mapping subject_id -> ref_image ... subjects_mni_space=subjects_mni, ... atlas_files=atlas_files, ... metric_files=metric_files, ... html_output="quality_report.html", ... )
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def run_quality_check_workflow(
+    self,
+    subjects_original_space: dict[str, dict[str, str | Path]],
+    ref_img: str | Path | dict[str, str | Path] | None = None,
+    *,
+    subjects_mni_space: dict[str, dict[str, str | Path]] | None = None,
+    atlas_files: dict[str, str | Path] | None = None,
+    metric_files: dict[str, dict[str, str | Path]] | None = None,
+    atlas_ref_img: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    html_output: str | Path | None = None,
+    skip_checks: list[str] | None = None,
+    n_jobs: int | None = None,
+    subject_kwargs: dict[str, Any] | None = None,
+    atlas_kwargs: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    **kwargs: Any,
+) -> dict[str, dict[str, dict[str, str | Path]]]:
+    """Run comprehensive quality checks for multiple subjects and tracts.
+
+    This workflow function orchestrates all available quality check methods
+    for each subject/tract combination and generates an HTML report.
+
+    Different quality checks require tracts in different coordinate spaces:
+    - **Original space** (subjects_original_space): Used for anatomical views,
+      CCI calculations, before/after CCI comparison, and AFQ profiles
+      (which need to align with subject-specific metric files).
+    - **MNI/Atlas space** (subjects_mni_space): Used for shape similarity
+      calculations and bundle assignment (which compare with atlas files).
+
+    Parameters
+    ----------
+    subjects_original_space : dict[str, dict[str, str | Path]]
+        Dictionary mapping subject IDs to their tract files in original/native space.
+        Format: {subject_id: {tract_name: tract_file_path}}
+        Example:
+        {
+            "sub-001": {
+                "AF_L": "path/to/sub-001_AF_L_original.trk",
+                "AF_R": "path/to/sub-001_AF_R_original.trk"
+            },
+            "sub-002": {
+                "AF_L": "path/to/sub-002_AF_L_original.trk"
+            }
+        }
+        Used for: anatomical views, CCI, before/after CCI, AFQ profiles.
+    ref_img : str | Path | dict[str, str | Path] | None, optional
+        Reference image(s) for subjects. Can be:
+        - A single path (str | Path): Used for all subjects
+        - A dictionary mapping subject IDs to reference images:
+          {subject_id: ref_image_path}
+        - None: Uses the reference image set during initialization or via
+          `set_reference_image()` for all subjects
+        Example for per-subject reference images:
+        {"sub-001": "path/to/sub-001_t1w.nii.gz", "sub-002": "path/to/sub-002_t1w.nii.gz"}
+    subjects_mni_space : dict[str, dict[str, str | Path]] | None, optional
+        Dictionary mapping subject IDs to their tract files in MNI/atlas space.
+        Format: {subject_id: {tract_name: tract_file_path}}
+        Example:
+        {
+            "sub-001": {
+                "AF_L": "path/to/sub-001_AF_L_mni.trk",
+                "AF_R": "path/to/sub-001_AF_R_mni.trk"
+            },
+            "sub-002": {
+                "AF_L": "path/to/sub-002_AF_L_mni.trk"
+            }
+        }
+        Used for: shape similarity, bundle assignment.
+        If None, these checks will be skipped.
+    atlas_files : dict[str, str | Path] | None, optional
+        Dictionary mapping tract names to their corresponding atlas/model files.
+        These files are shared across all subjects and used for:
+        - Atlas comparison visualizations
+        - Shape similarity calculations
+        - AFQ profile calculations (as model files)
+        - Bundle assignment visualizations (as model files)
+        Format: {tract_name: atlas_file_path}
+        Example: {"AF_L": "path/to/atlas_AF_L.trk", "AF_R": "path/to/atlas_AF_R.trk"}
+    metric_files : dict[str, dict[str, str | Path]] | None, optional
+        Dictionary mapping subject IDs to their metric files.
+        All tracts within a subject will use the same metric files.
+        Format: {subject_id: {metric_name: metric_file_path}}
+        Example:
+        {
+            "sub-001": {"FA": "path/to/sub-001_FA.nii.gz", "MD": "path/to/sub-001_MD.nii.gz"},
+            "sub-002": {"FA": "path/to/sub-002_FA.nii.gz"}
+        }
+        If provided, AFQ profile calculations will be run for all tracts in each subject.
+    atlas_ref_img : str | Path | None, optional
+        Path to the reference image matching the atlas coordinate space
+        (e.g., MNI template). Required if atlas files are in a different
+        coordinate space than subject tracts.
+    output_dir : str | Path | None, optional
+        Output directory for generated files. If None, uses the output
+        directory set during initialization.
+    html_output : str | Path | None, optional
+        Path for the HTML report file(s). Individual reports are generated per subject.
+        Options:
+        - None: Creates "{subject_id}_quality_check_report.html" for each subject
+          in the output directory.
+        - Directory path: Creates "{subject_id}_quality_check_report.html" for each
+          subject in the specified directory.
+        - File path: If the path contains "{subject}" or "{SUBJECT}" placeholder,
+          it will be replaced with the subject ID. Otherwise, the subject ID will
+          be prepended to the filename (e.g., "report.html" becomes "sub-001_report.html").
+        Example: "reports/{subject}_qc.html" will create "reports/sub-001_qc.html",
+        "reports/sub-002_qc.html", etc.
+    skip_checks : list[str] | None, optional
+        List of quality checks to skip. Valid options:
+        - "anatomical_views": Skip standard anatomical views
+        - "atlas_comparison": Skip atlas comparison views
+        - "cci": Skip CCI calculation and visualization
+        - "before_after_cci": Skip before/after CCI comparison
+        - "afq_profile": Skip AFQ profile visualization
+        - "bundle_assignment": Skip bundle assignment visualization
+        - "shape_similarity": Skip shape similarity calculation and visualization
+    n_jobs : int | None, optional
+        Number of parallel jobs to run for processing multiple subjects/tracts.
+        If None, uses the value set during initialization (default: 1).
+        Use -1 to automatically determine optimal number based on available
+        resources (respects SLURM allocations and OpenMP thread settings to
+        prevent oversubscription). Only effective when processing multiple
+        subjects/tracts. Default is None.
+
+        Note: When running under SLURM, -1 will automatically use
+        SLURM_CPUS_PER_TASK or SLURM_JOB_CPUS_PER_NODE. If OMP_NUM_THREADS is set,
+        it will divide the available CPUs by the number of OpenMP threads to
+        prevent resource contention.
+    subject_kwargs : dict[str, Any] | None, optional
+        Additional keyword arguments passed only to subject tract visualization
+        methods (e.g., `generate_anatomical_views` for subject files).
+        These kwargs are NOT passed to atlas visualization methods.
+        Example: `{"max_streamlines": 500, "max_points_per_streamline": 100}`
+    atlas_kwargs : dict[str, Any] | None, optional
+        Additional keyword arguments passed only to atlas visualization methods
+        (e.g., `generate_atlas_views`). These kwargs are NOT passed to subject
+        visualization methods. If None, atlas methods use default parameters.
+    overwrite : bool, optional
+        If True, regenerate all images even when output files already exist.
+        Passed to all quality check methods. Default is False.
+    **kwargs
+        Additional keyword arguments passed to ALL quality check methods
+        (both subject and atlas). Use `subject_kwargs` or `atlas_kwargs` to
+        pass different parameters to subject vs atlas methods.
+
+    Returns
+    -------
+    dict[str, dict[str, dict[str, str | Path]]]
+        Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+        This structure is compatible with `create_quality_check_html()`.
+
+    Raises
+    ------
+    InvalidInputError
+        If required files are missing or invalid.
+    TractographyVisualizationError
+        If quality check workflow fails.
+
+    Examples
+    --------
+    Single subject or all subjects share same reference image:
+    >>> visualizer = TractographyVisualizer(output_directory="output/")
+    >>> subjects_original = {
+    ...     "sub-001": {
+    ...         "AF_L": "sub-001_AF_L_original.trk",
+    ...         "AF_R": "sub-001_AF_R_original.trk",
+    ...     }
+    ... }
+    >>> results = visualizer.run_quality_check_workflow(
+    ...     subjects_original_space=subjects_original,
+    ...     ref_img="shared_t1w.nii.gz",  # Single image for all subjects
+    ...     html_output="quality_report.html",
+    ... )
+
+    Multiple subjects with different reference images:
+    >>> visualizer = TractographyVisualizer(output_directory="output/")
+    >>> subjects_original = {
+    ...     "sub-001": {"AF_L": "sub-001_AF_L_original.trk"},
+    ...     "sub-002": {"AF_L": "sub-002_AF_L_original.trk"},
+    ... }
+    >>> # Each subject has its own reference image
+    >>> ref_images = {
+    ...     "sub-001": "sub-001_t1w.nii.gz",
+    ...     "sub-002": "sub-002_t1w.nii.gz",
+    ... }
+    >>> subjects_mni = {
+    ...     "sub-001": {"AF_L": "sub-001_AF_L_mni.trk"},
+    ...     "sub-002": {"AF_L": "sub-002_AF_L_mni.trk"},
+    ... }
+    >>> atlas_files = {"AF_L": "atlas_AF_L.trk"}
+    >>> metric_files = {
+    ...     "sub-001": {"FA": "sub-001_FA.nii.gz"},
+    ...     "sub-002": {"FA": "sub-002_FA.nii.gz"},
+    ... }
+    >>> results = visualizer.run_quality_check_workflow(
+    ...     subjects_original_space=subjects_original,
+    ...     ref_img=ref_images,  # Dictionary mapping subject_id -> ref_image
+    ...     subjects_mni_space=subjects_mni,
+    ...     atlas_files=atlas_files,
+    ...     metric_files=metric_files,
+    ...     html_output="quality_report.html",
+    ... )
+    """
+    # Merge overwrite into kwargs so all quality check methods receive it
+    kwargs = dict(overwrite=overwrite, **kwargs)
+
+    # Initialize XVFB (X Virtual Framebuffer) if requested for headless environments
+    vdisplay = None
+    if os.environ.get("XVFB", "").lower() in ("1", "true", "yes"):
+        logger.info("Initializing XVFB for headless rendering")
+        vdisplay = Xvfb()
+        vdisplay.start()
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Handle reference image(s) - can be single path or dict mapping subject_id -> path
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        # Use instance reference image for all subjects
+        subject_ref_imgs: dict[str, Path] = dict.fromkeys(subjects_original_space.keys(), self._reference_image)
+    elif isinstance(ref_img, dict):
+        # Dictionary mapping subject IDs to reference images
+        subject_ref_imgs = {subject_id: Path(path) for subject_id, path in ref_img.items()}
+        # Validate all subjects have reference images
+        missing = set(subjects_original_space.keys()) - set(subject_ref_imgs.keys())
+        if missing:
+            raise InvalidInputError(
+                f"Missing reference images for subjects: {', '.join(sorted(missing))}",
+            )
+    else:
+        # Single reference image for all subjects
+        single_ref_img = Path(ref_img)
+        subject_ref_imgs = dict.fromkeys(subjects_original_space.keys(), single_ref_img)
+
+    # Set default skip_checks
+    if skip_checks is None:
+        skip_checks = []
+
+    # Determine number of jobs to use
+    if n_jobs is None:
+        n_jobs = self.n_jobs
+    elif n_jobs == -1:
+        # Use optimal n_jobs considering SLURM and OpenMP settings
+        base_n_jobs = _get_optimal_n_jobs()
+        # Further reduce if memory is limited
+        n_jobs = _get_n_jobs_with_memory_limit(
+            base_n_jobs,
+            estimated_memory_per_job_mb=2000.0,  # ~2GB per worker
+            safety_margin=0.2,
+        )
+    else:
+        n_jobs = max(1, n_jobs)
+        # Still check memory even if n_jobs is explicitly set
+        if psutil is not None:
+            n_jobs = _get_n_jobs_with_memory_limit(
+                n_jobs,
+                estimated_memory_per_job_mb=2000.0,
+                safety_margin=0.2,
+            )
+
+    # Log the final n_jobs value for debugging
+    logger.debug("Using n_jobs=%d for parallel processing", n_jobs)
+
+    # Initialize results dictionary
+    results: dict[str, dict[str, dict[str, str | Path]]] = {}
+
+    # Prepare all tasks (subject_id, tract_name, tract_file combinations)
+    tasks: list[tuple[str, str, str | Path, Path, Path]] = []
+    for subject_id, tracts in subjects_original_space.items():
+        subject_ref_img = subject_ref_imgs[subject_id]
+        subject_output_dir = output_dir / subject_id
+        subject_output_dir.mkdir(parents=True, exist_ok=True)
+
+        for tract_name, tract_file in tracts.items():
+            tract_path = Path(tract_file)
+            if not tract_path.exists():
+                raise FileNotFoundError(f"Tract file not found: {tract_file}")
+
+            tract_output_dir = subject_output_dir / tract_name
+            tract_output_dir.mkdir(parents=True, exist_ok=True)
+
+            tasks.append((subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir))
+
+    # Prepare visualizer parameters for worker processes
+    visualizer_params = {
+        "gif_size": self.gif_size,
+        "gif_duration": self.gif_duration,
+        "gif_palette_size": self.gif_palette_size,
+        "gif_frames": self.gif_frames,
+        "min_streamline_length": self.min_streamline_length,
+        "cci_threshold": self.cci_threshold,
+        "afq_resample_points": self.afq_resample_points,
+        "n_jobs": 1,  # Workers don't need parallelization
+    }
+
+    # Process tasks in parallel or sequentially
+    if n_jobs > 1 and len(tasks) > 1:
+        logger.info("Processing %d tracts using %d workers", len(tasks), n_jobs)
+        try:
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                futures = {
+                    executor.submit(
+                        _process_tract_worker,
+                        subject_id=subject_id,
+                        tract_name=tract_name,
+                        tract_file=tract_file,
+                        subject_ref_img=subject_ref_img,
+                        tract_output_dir=tract_output_dir,
+                        subjects_mni_space=subjects_mni_space,
+                        atlas_files=atlas_files,
+                        metric_files=metric_files,
+                        atlas_ref_img=atlas_ref_img,
+                        skip_checks=skip_checks,
+                        visualizer_params=visualizer_params,
+                        subject_kwargs=subject_kwargs,
+                        atlas_kwargs=atlas_kwargs,
+                        **kwargs,
+                    ): (subject_id, tract_name)
+                    for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks
+                }
+
+                # Collect results as they complete
+                broken_pool_detected = False
+                completed_count = 0
+                try:
+                    for future in as_completed(futures):
+                        subject_id, tract_name = futures[future]
+                        try:
+                            # Get result with timeout - this is where BrokenProcessPool is raised
+                            result_subject_id, result_tract_name, tract_results = future.result(timeout=None)
+                            if result_subject_id not in results:
+                                results[result_subject_id] = {}
+                            results[result_subject_id][result_tract_name] = tract_results
+                            # Clean up the future reference
+                            del tract_results
+                        except RuntimeError as e:
+                            # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
+                            # Check if this is a BrokenProcessPool by checking the error message and type name
+                            error_type = type(e).__name__
+                            error_msg = str(e)
+                            if (
+                                "BrokenProcessPool" in error_type
+                                or "BrokenProcessPool" in error_msg
+                                or "process pool" in error_msg.lower()
+                                or "was terminated abruptly" in error_msg
+                            ):
+                                broken_pool_detected = True
+                                logger.exception(
+                                    "BrokenProcessPool detected for %s/%s. Worker process may have crashed",
+                                    subject_id,
+                                    tract_name,
+                                )
+                                # Mark this task as failed
+                                if subject_id not in results:
+                                    results[subject_id] = {}
+                                if tract_name not in results[subject_id]:
+                                    results[subject_id][tract_name] = {}
+                                # Break out of the loop immediately - pool is broken, can't process more
+                                break
+                            logger.exception("RuntimeError processing %s/%s", subject_id, tract_name)
+                            if subject_id not in results:
+                                results[subject_id] = {}
+                            if tract_name not in results[subject_id]:
+                                results[subject_id][tract_name] = {}
+                        except (OSError, ValueError) as e:
+                            # OSError catches system-level errors
+                            # ValueError catches other processing errors
+                            logger.exception("Error processing %s/%s: %s", subject_id, tract_name, type(e).__name__)
+                            if subject_id not in results:
+                                results[subject_id] = {}
+                            if tract_name not in results[subject_id]:
+                                results[subject_id][tract_name] = {}
+                        except Exception as e:
+                            # Catch any other unexpected exceptions, including BrokenProcessPool
+                            error_type = type(e).__name__
+                            error_msg = str(e)
+                            if (
+                                "BrokenProcessPool" in error_type
+                                or "BrokenProcessPool" in error_msg
+                                or "process pool" in error_msg.lower()
+                                or "was terminated abruptly" in error_msg
+                            ):
+                                broken_pool_detected = True
+                                logger.exception(
+                                    "BrokenProcessPool detected for %s/%s (caught as Exception). Worker process may have crashed",
+                                    subject_id,
+                                    tract_name,
+                                )
+                                # Mark this task as failed
+                                if subject_id not in results:
+                                    results[subject_id] = {}
+                                if tract_name not in results[subject_id]:
+                                    results[subject_id][tract_name] = {}
+                                # Break out of the loop immediately - pool is broken, can't process more
+                                break
+                            logger.exception(
+                                "Unexpected error processing %s/%s: %s",
+                                subject_id,
+                                tract_name,
+                                type(e).__name__,
+                            )
+                            if subject_id not in results:
+                                results[subject_id] = {}
+                            if tract_name not in results[subject_id]:
+                                results[subject_id][tract_name] = {}
+                        finally:
+                            # Increment counter regardless of success/failure
+                            completed_count += 1
+
+                            # Clean up future reference and remove from futures dict
+                            # This is critical to prevent memory accumulation
+                            futures.pop(future, None)
+                            del future
+
+                            # Periodic garbage collection every 10 completed tasks
+                            # This helps prevent memory buildup during long-running jobs
+                            if completed_count > 0 and completed_count % 10 == 0:
+                                gc.collect()
+                except RuntimeError as e:
+                    # Catch BrokenProcessPool that might break out of the loop
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    if (
+                        "BrokenProcessPool" in error_type
+                        or "BrokenProcessPool" in error_msg
+                        or "process pool" in error_msg.lower()
+                        or "was terminated abruptly" in error_msg
+                    ):
+                        broken_pool_detected = True
+                        logger.exception(
+                            "BrokenProcessPool detected during result collection. Falling back to sequential processing",
+                        )
+                    else:
+                        # Re-raise if it's a different RuntimeError
+                        raise
+                except Exception as e:
+                    # Catch any other exceptions that might break the loop
+                    error_type = type(e).__name__
+                    error_msg = str(e)
+                    if (
+                        "BrokenProcessPool" in error_type
+                        or "BrokenProcessPool" in error_msg
+                        or "process pool" in error_msg.lower()
+                        or "was terminated abruptly" in error_msg
+                    ):
+                        broken_pool_detected = True
+                        logger.exception(
+                            "BrokenProcessPool detected during result collection (caught as Exception). Falling back to sequential processing",
+                        )
+                    else:
+                        # Log but don't re-raise - try to continue with what we have
+                        logger.exception("Unexpected error during result collection: %s", type(e).__name__)
+
+                # If we detected a broken process pool, break out and fall back to sequential
+                if broken_pool_detected:
+                    # Raise error to trigger fallback to sequential processing
+                    # The exception will be caught by the outer try-except block
+                    raise RuntimeError("BrokenProcessPool detected, falling back to sequential processing")  # noqa: TRY301
+
+                # Clear futures dictionary to free memory
+                futures.clear()
+
+                # Force garbage collection after all parallel tasks complete
+                # Run multiple times to handle circular references
+                for _ in range(3):
+                    gc.collect()
+        except RuntimeError as e:
+            # RuntimeError catches BrokenProcessPool (which is a subclass of RuntimeError)
+            # and other runtime errors that might occur with process pools
+            error_msg = str(e)
+            if "BrokenProcessPool" in error_msg or "falling back" in error_msg.lower():
+                logger.warning(
+                    "Process pool error occurred (worker process may have crashed with core dump). "
+                    "Falling back to sequential processing. "
+                    "If this persists, try: (1) reducing n_jobs, (2) increasing memory allocation, "
+                    "or (3) using n_jobs=1 to force sequential processing.",
+                )
+            else:
+                logger.exception("RuntimeError in process pool. Falling back to sequential processing")
+
+            # Fall back to sequential processing if process pool fails
+            # Only process tasks that haven't been completed yet
+            remaining_tasks = [
+                (s_id, t_name, t_file, s_ref, t_out)
+                for s_id, t_name, t_file, s_ref, t_out in tasks
+                if s_id not in results or t_name not in results.get(s_id, {})
+            ]
+
+            if remaining_tasks:
+                logger.info("Processing %d remaining tracts sequentially (fallback)", len(remaining_tasks))
+                for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in remaining_tasks:
+                    if subject_id not in results:
+                        results[subject_id] = {}
+                    # Skip if already processed
+                    if tract_name in results[subject_id]:
+                        continue
+                    try:
+                        tract_result = self._process_single_tract(
+                            subject_id=subject_id,
+                            tract_name=tract_name,
+                            tract_file=tract_file,
+                            subject_ref_img=subject_ref_img,
+                            tract_output_dir=tract_output_dir,
+                            subjects_mni_space=subjects_mni_space,
+                            atlas_files=atlas_files,
+                            metric_files=metric_files,
+                            atlas_ref_img=atlas_ref_img,
+                            skip_checks=skip_checks,
+                            subject_kwargs=subject_kwargs,
+                            atlas_kwargs=atlas_kwargs,
+                            **kwargs,
+                        )
+                        results[subject_id][tract_name] = tract_result
+                        # Clean up result reference
+                        del tract_result
+                    except (OSError, ValueError, RuntimeError, MemoryError) as process_error:
+                        logger.exception(
+                            "Error processing %s/%s in fallback mode (%s)",
+                            subject_id,
+                            tract_name,
+                            type(process_error).__name__,
+                        )
+                        results[subject_id][tract_name] = {}
+                    except Exception as process_error:
+                        logger.exception(
+                            "Unexpected error processing %s/%s in fallback mode (%s)",
+                            subject_id,
+                            tract_name,
+                            type(process_error).__name__,
+                        )
+                        results[subject_id][tract_name] = {}
+                    finally:
+                        # Force garbage collection after each tract in fallback mode
+                        # Run multiple times to handle circular references in VTK objects
+                        for _ in range(2):
+                            gc.collect()
+            else:
+                logger.info("All tasks already completed, skipping fallback processing")
+    else:
+        # Sequential processing
+        logger.info("Processing %d tracts sequentially", len(tasks))
+        for subject_id, tract_name, tract_file, subject_ref_img, tract_output_dir in tasks:
+            if subject_id not in results:
+                results[subject_id] = {}
+            try:
+                tract_result = self._process_single_tract(
+                    subject_id=subject_id,
+                    tract_name=tract_name,
+                    tract_file=tract_file,
+                    subject_ref_img=subject_ref_img,
+                    tract_output_dir=tract_output_dir,
+                    subjects_mni_space=subjects_mni_space,
+                    atlas_files=atlas_files,
+                    metric_files=metric_files,
+                    atlas_ref_img=atlas_ref_img,
+                    skip_checks=skip_checks,
+                    subject_kwargs=subject_kwargs,
+                    atlas_kwargs=atlas_kwargs,
+                    **kwargs,
+                )
+                results[subject_id][tract_name] = tract_result
+                # Clean up result reference
+                del tract_result
+            finally:
+                # Clean up after each tract in sequential processing
+                # Run multiple times to handle circular references in VTK objects
+                for _ in range(2):
+                    gc.collect()
+
+    # Generate HTML reports (one per subject) - after all processing is complete
+    if html_output is None:
+        html_output_dir = output_dir
+        html_output_template = None
+    else:
+        html_output_path = Path(html_output)
+        # If html_output is a directory, use it as the output directory
+        if html_output_path.is_dir() or (not html_output_path.exists() and html_output_path.suffix == ""):
+            html_output_dir = html_output_path
+            html_output_template = None
+        else:
+            # If html_output is a file path, use its parent as directory and name as template
+            html_output_dir = html_output_path.parent
+            html_output_template = html_output_path.stem
+
+    # Generate individual HTML reports per subject
+    html_files_generated = []
+    for subject_id, subject_tracts in results.items():
+        # Convert Path objects to strings for HTML function for this subject only
+        subject_results_for_html: dict[str, dict[str, dict[str, str]]] = {
+            subject_id: {},
+        }
+        if isinstance(subject_tracts, dict):
+            for tract_name, media_dict in subject_tracts.items():
+                subject_results_for_html[subject_id][tract_name] = {}
+                if isinstance(media_dict, dict):
+                    for media_type, file_path in media_dict.items():
+                        # Convert Path to string, or keep as string/number
+                        if isinstance(file_path, Path):
+                            subject_results_for_html[subject_id][tract_name][media_type] = str(file_path)
+                        else:
+                            subject_results_for_html[subject_id][tract_name][media_type] = str(file_path)
+
+        # Determine output file path for this subject
+        # Ensure output directory exists
+        html_output_dir.mkdir(parents=True, exist_ok=True)
+
+        if html_output_template:
+            # Use template: replace {subject} placeholder or prepend subject_id
+            if "{subject}" in html_output_template or "{SUBJECT}" in html_output_template:
+                # Replace placeholder with subject_id
+                template_with_subject = html_output_template.replace("{subject}", subject_id).replace(
+                    "{SUBJECT}",
+                    subject_id,
+                )
+                subject_html_file = html_output_dir / f"{template_with_subject}.html"
+            else:
+                # No placeholder found, prepend subject_id to filename
+                subject_html_file = html_output_dir / f"{subject_id}_{html_output_template}.html"
+        else:
+            # Default: subject_id_quality_check_report.html
+            subject_html_file = html_output_dir / f"{subject_id}_quality_check_report.html"
+
+        # Generate HTML report
+        try:
+            create_quality_check_html(
+                subject_results_for_html,
+                str(subject_html_file),
+                title=f"Tractography Quality Check Report - {subject_id}",
+            )
+            html_files_generated.append(subject_html_file)
+            logger.info("Quality check report generated for %s: %s", subject_id, subject_html_file)
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.warning("Failed to generate HTML report for %s: %s", subject_id, e)
+
+        # Generate JSON results file for this subject
+        # Determine JSON file path (same location and naming pattern as HTML, but with .json extension)
+        subject_json_file = subject_html_file.with_suffix(".json")
+        try:
+            # Convert Path objects to strings for JSON serialization
+            # Use Any for values since they can be strings, numbers, or Path objects
+            subject_results_for_json: dict[str, dict[str, dict[str, Any]]] = {
+                subject_id: {},
+            }
+            if isinstance(subject_tracts, dict):
+                for tract_name, media_dict in subject_tracts.items():
+                    subject_results_for_json[subject_id][tract_name] = {}
+                    if isinstance(media_dict, dict):
+                        for media_type, file_path in media_dict.items():
+                            # Convert Path to string, or keep as string/number
+                            if isinstance(file_path, Path):
+                                subject_results_for_json[subject_id][tract_name][media_type] = str(file_path)
+                            elif isinstance(file_path, (int, float)):
+                                # Keep numeric values as-is (JSON can handle them)
+                                subject_results_for_json[subject_id][tract_name][media_type] = file_path
+                            else:
+                                subject_results_for_json[subject_id][tract_name][media_type] = str(file_path)
+
+            # Write JSON file
+            with open(subject_json_file, "w", encoding="utf-8") as f:
+                json.dump(subject_results_for_json, f, indent=2, ensure_ascii=False)
+            logger.info("Results JSON generated for %s: %s", subject_id, subject_json_file)
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.warning("Failed to generate JSON results for %s: %s", subject_id, e)
+        finally:
+            # Clean up subject HTML conversion dictionary after use
+            del subject_results_for_html
+            gc.collect()
+
+    if html_files_generated:
+        logger.info("Generated %d individual subject report(s)", len(html_files_generated))
+
+    # Generate CSV summary file with all subjects' data
+    csv_output_file = html_output_dir / "quality_check_summary.csv"
+    try:
+        # Convert all results to format expected by CSV function
+        all_results_for_csv: dict[str, dict[str, dict[str, str]]] = {}
+        for subject_id, subject_tracts in results.items():
+            all_results_for_csv[subject_id] = {}
+            if isinstance(subject_tracts, dict):
+                for tract_name, media_dict in subject_tracts.items():
+                    all_results_for_csv[subject_id][tract_name] = {}
+                    if isinstance(media_dict, dict):
+                        for media_type, file_path in media_dict.items():
+                            # Convert Path to string, or keep as string/number
+                            if isinstance(file_path, Path):
+                                all_results_for_csv[subject_id][tract_name][media_type] = str(file_path)
+                            else:
+                                all_results_for_csv[subject_id][tract_name][media_type] = str(file_path)
+
+        create_summary_csv(all_results_for_csv, str(csv_output_file))
+        logger.info("Summary CSV generated: %s", csv_output_file)
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.warning("Failed to generate summary CSV: %s", e)
+
+    # Stop XVFB if it was started
+    if vdisplay is not None:
+        logger.info("Stopping XVFB")
+        vdisplay.stop()
+    return results
+```
+
+### set_output_directory
+
+```
+set_output_directory(output_directory: str | Path) -> None
+```
+
+Set the output directory for generated files.
+
+##### Parameters
+
+output_directory : str | Path Path to the output directory. Will be created if it doesn't exist.
+
+##### Raises
+
+OSError If the directory cannot be created.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def set_output_directory(self, output_directory: str | Path) -> None:
+    """Set the output directory for generated files.
+
+    Parameters
+    ----------
+    output_directory : str | Path
+        Path to the output directory. Will be created if it doesn't exist.
+
+    Raises
+    ------
+    OSError
+        If the directory cannot be created.
+    """
+    out_dir = Path(output_directory)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    self._output_directory = out_dir
+```
+
+### set_reference_image
+
+```
+set_reference_image(reference_image: str | Path) -> None
+```
+
+Set the reference T1-weighted image.
+
+##### Parameters
+
+reference_image : str | Path Path to the reference image file.
+
+##### Raises
+
+FileNotFoundError If the reference image file does not exist.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def set_reference_image(self, reference_image: str | Path) -> None:
+    """Set the reference T1-weighted image.
+
+    Parameters
+    ----------
+    reference_image : str | Path
+        Path to the reference image file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the reference image file does not exist.
+    """
+    ref_path = Path(reference_image)
+    if not ref_path.exists():
+        raise FileNotFoundError(f"Reference image not found: {reference_image}")
+    self._reference_image = ref_path
+```
+
+### view_tract_interactive
+
+```
+view_tract_interactive(
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    show_glass_brain: bool = True,
+    window_size: tuple[int, int] = (800, 800),
+    max_streamlines: int | None = None,
+    subsample_factor: float | None = None,
+    max_points_per_streamline: int | None = None,
+    resample_streamlines: bool = False,
+) -> None
+```
+
+Display a tract in an interactive 3D viewer.
+
+Opens a FURY window that allows the user to rotate, zoom, and interact with the tract visualization. The window blocks until closed.
+
+##### Parameters
+
+tract_file : str | Path Path to the tractography file. ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization or via `set_reference_image()`. show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. window_size : tuple[int, int], optional Size of the interactive window in pixels. Default is (800, 800).
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no reference image is provided and none was set. TractographyVisualizationError If loading or visualization fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer(reference_image="t1w.nii.gz")
+> > >
+> > > #### View a single tract interactively
+> > >
+> > > visualizer.view_tract_interactive("tract.trk")
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def view_tract_interactive(
+    self,
+    tract_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    show_glass_brain: bool = True,
+    window_size: tuple[int, int] = (800, 800),
+    max_streamlines: int | None = None,  # noqa: ARG002
+    subsample_factor: float | None = None,  # noqa: ARG002
+    max_points_per_streamline: int | None = None,  # noqa: ARG002
+    resample_streamlines: bool = False,  # noqa: ARG002
+) -> None:
+    """Display a tract in an interactive 3D viewer.
+
+    Opens a FURY window that allows the user to rotate, zoom, and interact
+    with the tract visualization. The window blocks until closed.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the tractography file.
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization or via `set_reference_image()`.
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    window_size : tuple[int, int], optional
+        Size of the interactive window in pixels. Default is (800, 800).
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no reference image is provided and none was set.
+    TractographyVisualizationError
+        If loading or visualization fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(reference_image="t1w.nii.gz")
+    >>> # View a single tract interactively
+    >>> visualizer.view_tract_interactive("tract.trk")
+    """
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    tract_file = Path(tract_file)
+    if not tract_file.exists():
+        raise FileNotFoundError(f"Tract file not found: {tract_file}")
+
+    try:
+        # Load tract
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+        ref_img_obj = nib.load(str(ref_img))
+        tract_streamlines = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # Filter streamlines if requested
+        tract_streamlines = self._downsample_streamlines(tract_streamlines)
+
+        # Check if streamlines are empty after filtering
+        if not tract_streamlines or len(tract_streamlines) == 0:
+            logger.warning("Tract has 0 streamlines after filtering. Skipping visualization.")
+            return
+
+        # Calculate colors based on streamline directions
+        streamline_colors = calculate_direction_colors(tract_streamlines)
+
+        # Get centroid for camera positioning
+        centroid = calculate_centroid(tract_streamlines)
+
+        # Clean up loaded objects
+        del tract, ref_img_obj
+
+        # Create scene
+        scene, _ = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+        # Create and add streamline actor
+        tract_actor = self._create_streamline_actor(tract_streamlines, streamline_colors)
+        scene.add(tract_actor)
+
+        # Set camera to show the tract nicely
+        bbox_size = calculate_bbox_size(tract_streamlines)
+        # Use a default view (coronal) for initial camera position
+        self._set_anatomical_camera(
+            scene,
+            centroid,
+            "coronal",
+            bbox_size=bbox_size,
+        )
+
+        # Show interactive window (blocks until closed)
+        # Use window.show() which is blocking and simpler
+        window.show(
+            scene,
+            size=window_size,
+            title=str(tract_file.name),
+        )
+
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to display tract interactively: {e}",
+        ) from e
+```
+
+### visualize_bundle_assignment
+
+```
+visualize_bundle_assignment(
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    n_segments: int = 100,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    colormap: str = "random",
+    overwrite: bool = False,
+) -> dict[str, Path]
+```
+
+Visualize bundle assignment map using DIPY's assignment_map.
+
+Assigns each streamline in the target tract to a segment of the model bundle using DIPY's assignment_map function. Color-codes streamlines by their assigned segment. Generates anatomical views showing which streamlines belong to which bundle segment.
+
+##### Parameters
+
+tract_file : str | Path Path to the target tractography file (streamlines to assign). atlas_file : str | Path Path to the atlas tractography file (reference bundle for assignment). ref_img : str | Path | None, optional Path to the reference image. If None, uses the reference image set during initialization. n_segments : int, optional Number of segments to divide the model bundle into. Each streamline in the target tract will be assigned to the closest segment. Default is 100. views : list[str] | None, optional List of views to generate. Options: "coronal", "axial", "sagittal". If None, generates all three views. Default is None. output_dir : str | Path | None, optional Output directory for generated images. If None, uses the output directory set during initialization. figure_size : tuple[int, int], optional Size of the output images in pixels. Default is (800, 800). show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. colormap : str, optional Name of the colormap to use for segment colors. Should be a discrete colormap (e.g., "tab20", "Set3", "Paired"). Default is "tab20". overwrite : bool, optional If True, regenerate images even when output files already exist. Default is False.
+
+##### Returns
+
+dict[str, Path] Dictionary mapping view names to their output file paths. Keys: "coronal", "axial", "sagittal".
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no output directory is available or invalid view name. TractographyVisualizationError If visualization fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer( ... reference_image="t1w.nii.gz", output_directory="output/" ... ) views = visualizer.visualize_bundle_assignment( ... "target_tract.trk", "model_tract.trk", n_segments=100 ... )
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def visualize_bundle_assignment(
+    self,
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    ref_img: str | Path | None = None,
+    *,
+    n_segments: int = 100,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    colormap: str = "random",
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Visualize bundle assignment map using DIPY's assignment_map.
+
+    Assigns each streamline in the target tract to a segment of the model
+    bundle using DIPY's assignment_map function. Color-codes streamlines
+    by their assigned segment. Generates anatomical views showing which
+    streamlines belong to which bundle segment.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the target tractography file (streamlines to assign).
+    atlas_file : str | Path
+        Path to the atlas tractography file (reference bundle for assignment).
+    ref_img : str | Path | None, optional
+        Path to the reference image. If None, uses the reference image
+        set during initialization.
+    n_segments : int, optional
+        Number of segments to divide the model bundle into. Each streamline
+        in the target tract will be assigned to the closest segment.
+        Default is 100.
+    views : list[str] | None, optional
+        List of views to generate. Options: "coronal", "axial", "sagittal".
+        If None, generates all three views. Default is None.
+    output_dir : str | Path | None, optional
+        Output directory for generated images. If None, uses the output
+        directory set during initialization.
+    figure_size : tuple[int, int], optional
+        Size of the output images in pixels. Default is (800, 800).
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    colormap : str, optional
+        Name of the colormap to use for segment colors. Should be a
+        discrete colormap (e.g., "tab20", "Set3", "Paired").
+        Default is "tab20".
+    overwrite : bool, optional
+        If True, regenerate images even when output files already exist.
+        Default is False.
+
+    Returns
+    -------
+    dict[str, Path]
+        Dictionary mapping view names to their output file paths.
+        Keys: "coronal", "axial", "sagittal".
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no output directory is available or invalid view name.
+    TractographyVisualizationError
+        If visualization fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(
+    ...     reference_image="t1w.nii.gz", output_directory="output/"
+    ... )
+    >>> views = visualizer.visualize_bundle_assignment(
+    ...     "target_tract.trk", "model_tract.trk", n_segments=100
+    ... )
+    """
+    rgb = (2, 3)
+
+    # Determine which views to generate
+    if views is None:
+        views_to_generate = list(ANATOMICAL_VIEW_NAMES)
+    else:
+        views_to_generate = views
+        invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
+        if invalid_views:
+            raise InvalidInputError(
+                f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
+            )
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if ref_img is None:
+        if self._reference_image is None:
+            raise InvalidInputError(
+                "No reference image provided. Set it via constructor or "
+                "set_reference_image() method, or pass it as an argument.",
+            )
+        ref_img = self._reference_image
+    else:
+        ref_img = Path(ref_img)
+
+    tract_name = Path(tract_file).stem
+    generated_views: dict[str, Path] = {}
+
+    # Check if all output files already exist BEFORE loading tracts
+    # This prevents unnecessary memory usage when files are already generated
+    all_files_exist = True
+    for view_name in views_to_generate:
+        output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
+        if output_image.exists() and not overwrite:
+            generated_views[view_name] = output_image
+            logger.debug("Skipping generation of %s (file already exists)", output_image)
+        else:
+            all_files_exist = False
+
+    # If all files exist, return early without loading tracts
+    if all_files_exist:
+        return generated_views
+
+    try:
+        # Load both tracts only if we need to generate at least one view
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+
+        atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+        atlas_tract.to_rasmm()
+
+        if not tract.streamlines or len(tract.streamlines) == 0:
+            raise InvalidInputError("Target tractogram is empty.")
+        if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+            raise InvalidInputError("Atlas tractogram is empty.")
+
+        # Transform both tracts to reference space for assignment
+        # assignment_map requires both tracts to be in the same coordinate space
+        ref_img_obj = nib.load(str(ref_img))
+        tract_streamlines = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+        atlas_streamlines = transform_streamlines(
+            atlas_tract.streamlines,
+            np.linalg.inv(ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # Downsample points (to avoid VTK segfaults)
+        tract_streamlines = self._downsample_streamlines(tract_streamlines)
+        atlas_streamlines = self._downsample_streamlines(atlas_streamlines)
+
+        # Calculate assignments on transformed streamlines (both in same space)
+        # This ensures consistent colors across all rotations
+        # Use assignment_map to assign target streamlines to model bundle segments
+        # assignment_map returns per-point assignments (one assignment per point)
+        # Assignments are in the order points appear when iterating through streamlines sequentially
+        assignment_indices = assignment_map(tract_streamlines, atlas_streamlines, n_segments)
+        assignment_indices = np.array(assignment_indices)
+
+        # Validate that the number of assignments matches the number of points
+        total_points = sum(len(sl) for sl in tract_streamlines)
+        if len(assignment_indices) != total_points:
+            msg = (
+                f"Mismatch between number of assignments ({len(assignment_indices)}) "
+                f"and number of points ({total_points}). This may indicate an issue "
+                "with streamline filtering or assignment_map."
+            )
+            raise ValueError(msg)  # noqa: TRY301
+
+        # Generate colors for each segment
+        # Use random colors like DIPY example (produces wide spectrum of distinct colors)
+        # or use a colormap if specified (e.g., "Spectral", "hsv", "rainbow" for wide spectrum)
+        if colormap == "random" or colormap is None:
+            # Match DIPY example: use random colors for maximum color differentiation
+            # This produces a wide spectrum of distinct colors like the example image
+            rng = np.random.default_rng()
+            segment_colors = [tuple(rng.random(3)) for si in range(n_segments)]
+        else:
+            # Use specified colormap
+            # For wide spectrum, consider: "Spectral", "hsv", "rainbow", "turbo"
+            segment_colors_array = create_colormap(
+                np.linspace(0, 1, n_segments),
+                name=colormap,
+            )
+            # Convert to RGB (0-1 range), remove alpha if present
+            segment_colors_array = (
+                segment_colors_array[:, : rgb[1]]
+                if segment_colors_array.shape[1] > rgb[1]
+                else segment_colors_array
+            )
+            # Convert to list of tuples for compatibility
+            segment_colors = [tuple(segment_colors_array[i]) for i in range(n_segments)]
+
+        # Create per-point colors based on assignment (matching DIPY example pattern)
+        # Convert to list of tuples as in DIPY example to ensure proper color application
+        # This is calculated once and reused for all rotations
+        # Each point gets the color corresponding to its segment assignment
+        # This creates the banding effect as points along a streamline are assigned to different segments
+        # IMPORTANT: assignment_indices are in the order points appear when iterating through
+        # streamlines sequentially (streamline 0 all points, then streamline 1 all points, etc.)
+        # Construct colors by explicitly iterating through streamlines to ensure order matches actor.line()
+        point_colors = []
+        assignment_idx = 0
+        for sl in tract_streamlines:
+            for _ in range(len(sl)):
+                # Ensure we don't go out of bounds
+                if assignment_idx >= len(assignment_indices):
+                    msg = (
+                        f"Assignment index {assignment_idx} exceeds number of assignments "
+                        f"({len(assignment_indices)}). This indicates a mismatch between "
+                        "streamlines and assignments."
+                    )
+                    raise ValueError(msg)  # noqa: TRY301
+                # Get the color for this point's assigned segment
+                seg_idx = assignment_indices[assignment_idx]
+                # Ensure index is within bounds
+                if seg_idx < 0 or seg_idx >= len(segment_colors):
+                    # Fallback to first color if index is out of bounds
+                    point_colors.append(segment_colors[0])
+                else:
+                    point_colors.append(tuple(segment_colors[seg_idx]))
+                assignment_idx += 1
+
+        # Final validation: ensure we processed all assignments
+        if assignment_idx != len(assignment_indices):
+            msg = (
+                f"Processed {assignment_idx} points but have {len(assignment_indices)} assignments. "
+                "This indicates a mismatch between streamlines and assignments."
+            )
+            raise ValueError(msg)  # noqa: TRY301
+
+        # Debug: Show sample of assignments and colors for first streamline (after point_colors is created)
+        point_idx = 0
+        first_sl = tract_streamlines[0]
+        first_sl_assignments = assignment_indices[point_idx : point_idx + len(first_sl)]
+        first_sl_colors = point_colors[point_idx : point_idx + len(first_sl)]
+        logger.debug(
+            "First streamline: %d points, %d unique segments",
+            len(first_sl),
+            len(np.unique(first_sl_assignments)),
+        )
+        logger.debug("Sample assignments (first 10): %s", first_sl_assignments[:10])
+        logger.debug("Sample colors (first 3): %s", first_sl_colors[:3])
+
+        # Get centroid using utility function
+        centroid = calculate_centroid(tract_streamlines)
+        gc.collect()
+
+        # Generate each requested view
+        for view_name in views_to_generate:
+            output_image = output_dir / f"bundle_assignment_{tract_name}_{view_name}.png"
+
+            # Skip if file already exists (already added to generated_views above)
+            if output_image.exists() and not overwrite:
+                continue
+
+            # Create scene using helper method
+            scene, brain_actor = self._create_scene(ref_img=ref_img, show_glass_brain=show_glass_brain)
+
+            # Convert colors to numpy array format (N x 3) for actor.line
+            point_colors_array = np.array(point_colors, dtype=np.float32)
+
+            # Ensure the array has the correct shape (N points x 3 RGB values)
+            if point_colors_array.ndim != rgb[0] or point_colors_array.shape[1] != rgb[1]:
+
+                def _create_shape_error(error_msg: str) -> ValueError:
+                    return ValueError(error_msg)
+
+                msg = (
+                    f"point_colors_array has incorrect shape: {point_colors_array.shape}. "
+                    f"Expected (N, 3) where N is the number of points."
+                )
+                raise _create_shape_error(msg)
+
+            # Use original streamlines with original colors - no rotation needed
+            try:
+                tract_actor = actor.line(tract_streamlines, colors=point_colors_array, fake_tube=True, linewidth=6)
+                scene.add(tract_actor)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    total_points = sum(len(sl) for sl in tract_streamlines)
+                    logger.exception(
+                        "VTK memory allocation failed for bundle assignment view %s (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        view_name,
+                        len(tract_streamlines),
+                        total_points,
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    if brain_actor is not None:
+                        del brain_actor
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Set camera position for anatomical view (no streamline rotation needed)
+            # Calculate bbox for camera distance using utility function
+            bbox_size = calculate_bbox_size(tract_streamlines)
+
+            # Use helper method to set camera
+            self._set_anatomical_camera(
+                scene,
+                centroid,
+                view_name,
+                bbox_size=bbox_size,
+            )
+
+            # Record the scene (this can also fail with std::bad_alloc)
+            try:
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                generated_views[view_name] = output_image
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors during rendering
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                        "Tract has %d streamlines with %d total points. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        view_name,
+                        len(tract_streamlines),
+                        sum(len(sl) for sl in tract_streamlines),
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    del tract_actor
+                    if show_glass_brain:
+                        del brain_actor
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Explicitly clean up scene and actors to free memory
+            # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+            scene.clear()
+            del tract_actor
+            if show_glass_brain:
+                del brain_actor
+            del scene
+
+            # Force garbage collection between views to free memory
+            # This is critical for large tractograms to prevent OOM kills
+            gc.collect()
+
+            generated_views[view_name] = output_image
+
+    except (OSError, ValueError, RuntimeError, IndexError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to visualize bundle assignment: {e}",
+        ) from e
+    else:
+        return generated_views
+```
+
+### visualize_shape_similarity
+
+```
+visualize_shape_similarity(
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    *,
+    atlas_ref_img: str | Path | None = None,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    subject_color: tuple[float, float, float] = (
+        1.0,
+        0.0,
+        0.0,
+    ),
+    atlas_color: tuple[float, float, float] = (
+        0.0,
+        0.0,
+        1.0,
+    ),
+    overwrite: bool = False,
+) -> dict[str, Path]
+```
+
+Visualize shape similarity by overlaying subject and atlas tracts.
+
+Generates anatomical views (coronal, axial, sagittal) showing both tracts overlaid with different colors to visualize their shape similarity.
+
+##### Parameters
+
+tract_file : str | Path Path to the subject tractography file. atlas_file : str | Path Path to the atlas tractography file. atlas_ref_img : str | Path | None, optional Path to the reference image that matches the atlas coordinate space (e.g., MNI template if atlas is in MNI space). views : list[str] | None, optional List of views to generate. Options: "coronal", "axial", "sagittal". If None, generates all three views. Default is None. output_dir : str | Path | None, optional Output directory for generated images. If None, uses the output directory set during initialization. figure_size : tuple[int, int], optional Size of the output images in pixels. Default is (800, 800). show_glass_brain : bool, optional Whether to show the glass brain outline. Default is True. subject_color : tuple[float, float, float], optional RGB color for subject tract (0-1 range). Default is (1.0, 0.0, 0.0) (red). atlas_color : tuple[float, float, float], optional RGB color for atlas tract (0-1 range). Default is (0.0, 0.0, 1.0) (blue). overwrite : bool, optional If True, regenerate images even when output files already exist. Default is False.
+
+##### Returns
+
+dict[str, Path] Dictionary mapping view names to their output file paths. Keys: "coronal", "axial", "sagittal".
+
+##### Raises
+
+FileNotFoundError If required files are not found. InvalidInputError If no output directory is available or invalid view name. TractographyVisualizationError If visualization fails.
+
+##### Examples
+
+> > > visualizer = TractographyVisualizer( ... reference_image="t1w.nii.gz", output_directory="output/" ... ) views = visualizer.visualize_shape_similarity( ... "subject_tract.trk", "atlas_tract.trk" ... )
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def visualize_shape_similarity(
+    self,
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    *,
+    atlas_ref_img: str | Path | None = None,
+    views: list[str] | None = None,
+    output_dir: str | Path | None = None,
+    figure_size: tuple[int, int] = (800, 800),
+    show_glass_brain: bool = True,
+    subject_color: tuple[float, float, float] = (1.0, 0.0, 0.0),  # Red
+    atlas_color: tuple[float, float, float] = (0.0, 0.0, 1.0),  # Blue
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Visualize shape similarity by overlaying subject and atlas tracts.
+
+    Generates anatomical views (coronal, axial, sagittal) showing both tracts
+    overlaid with different colors to visualize their shape similarity.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the subject tractography file.
+    atlas_file : str | Path
+        Path to the atlas tractography file.
+    atlas_ref_img : str | Path | None, optional
+        Path to the reference image that matches the atlas coordinate space
+        (e.g., MNI template if atlas is in MNI space).
+    views : list[str] | None, optional
+        List of views to generate. Options: "coronal", "axial", "sagittal".
+        If None, generates all three views. Default is None.
+    output_dir : str | Path | None, optional
+        Output directory for generated images. If None, uses the output
+        directory set during initialization.
+    figure_size : tuple[int, int], optional
+        Size of the output images in pixels. Default is (800, 800).
+    show_glass_brain : bool, optional
+        Whether to show the glass brain outline. Default is True.
+    subject_color : tuple[float, float, float], optional
+        RGB color for subject tract (0-1 range). Default is (1.0, 0.0, 0.0) (red).
+    atlas_color : tuple[float, float, float], optional
+        RGB color for atlas tract (0-1 range). Default is (0.0, 0.0, 1.0) (blue).
+    overwrite : bool, optional
+        If True, regenerate images even when output files already exist.
+        Default is False.
+
+    Returns
+    -------
+    dict[str, Path]
+        Dictionary mapping view names to their output file paths.
+        Keys: "coronal", "axial", "sagittal".
+
+    Raises
+    ------
+    FileNotFoundError
+        If required files are not found.
+    InvalidInputError
+        If no output directory is available or invalid view name.
+    TractographyVisualizationError
+        If visualization fails.
+
+    Examples
+    --------
+    >>> visualizer = TractographyVisualizer(
+    ...     reference_image="t1w.nii.gz", output_directory="output/"
+    ... )
+    >>> views = visualizer.visualize_shape_similarity(
+    ...     "subject_tract.trk", "atlas_tract.trk"
+    ... )
+    """
+    # Determine which views to generate
+    if views is None:
+        views_to_generate = list(ANATOMICAL_VIEW_NAMES)
+    else:
+        views_to_generate = views
+        invalid_views = [v for v in views_to_generate if v not in ANATOMICAL_VIEW_NAMES]
+        if invalid_views:
+            raise InvalidInputError(
+                f"Invalid view names: {invalid_views}. Valid options: {list(ANATOMICAL_VIEW_NAMES)}",
+            )
+
+    # Get output directory
+    if output_dir is None:
+        if self._output_directory is None:
+            raise InvalidInputError(
+                "No output directory provided. Set it via constructor or "
+                "set_output_directory() method, or pass it as an argument.",
+            )
+        output_dir = self._output_directory
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    tract_name = Path(tract_file).stem
+    atlas_name = Path(atlas_file).stem
+    generated_views: dict[str, Path] = {}
+
+    # Check if all output files already exist BEFORE loading tracts
+    # This prevents unnecessary memory usage when files are already generated
+    all_files_exist = True
+    for view_name in views_to_generate:
+        output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
+        if output_image.exists() and not overwrite:
+            generated_views[view_name] = output_image
+            logger.debug("Skipping generation of %s (file already exists)", output_image)
+        else:
+            all_files_exist = False
+
+    # If all files exist, return early without loading tracts
+    if all_files_exist:
+        return generated_views
+
+    try:
+        # Load both tracts only if we need to generate at least one view
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+        tract.to_rasmm()
+
+        atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+        atlas_tract.to_rasmm()
+
+        # Check if tracts are empty
+        if not tract.streamlines or len(tract.streamlines) == 0:
+            raise InvalidInputError("Subject tract is empty.")
+        if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+            raise InvalidInputError("Atlas tract is empty.")
+
+        # Load reference images and transform tracts to same space
+        atlas_ref_img_obj = nib.load(str(atlas_ref_img))
+
+        # Transform subject tract to reference space
+        subject_streamlines = transform_streamlines(
+            tract.streamlines,
+            np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # No transformation needed, use streamlines directly
+        atlas_streamlines = transform_streamlines(
+            atlas_tract.streamlines,
+            np.linalg.inv(atlas_ref_img_obj.affine),  # type: ignore[attr-defined]
+        )
+
+        # Downsample points (to avoid VTK segfaults)
+        subject_streamlines = self._downsample_streamlines(subject_streamlines)
+        atlas_streamlines = self._downsample_streamlines(atlas_streamlines)
+
+        # Check if streamlines are empty after filtering
+        if (not subject_streamlines or len(subject_streamlines) == 0) and (
+            not atlas_streamlines or len(atlas_streamlines) == 0
+        ):
+            logger.warning(
+                "Both subject and atlas tracts have 0 streamlines after filtering. Skipping visualization.",
+            )
+            return {}
+        if not subject_streamlines or len(subject_streamlines) == 0:
+            logger.warning(
+                "Subject tract has 0 streamlines after filtering. Skipping visualization.",
+            )
+            return {}
+        if not atlas_streamlines or len(atlas_streamlines) == 0:
+            logger.warning(
+                "Atlas tract has 0 streamlines after filtering. Skipping visualization.",
+            )
+            return {}
+
+        # Calculate combined centroid for rotation (from both tracts)
+        # Calculate combined centroid using utility function
+        centroid = calculate_combined_centroid(subject_streamlines, atlas_streamlines)
+
+        # Generate each requested view
+        for view_name in views_to_generate:
+            output_image = output_dir / f"similarity_{tract_name}_vs_{atlas_name}_{view_name}.png"
+
+            # Skip if file already exists (already added to generated_views above)
+            if output_image.exists() and not overwrite:
+                continue
+
+            # Create scene using helper method
+            scene, brain_actor = self._create_scene(ref_img=atlas_ref_img, show_glass_brain=show_glass_brain)
+
+            # Add subject tract with subject color (single color for all streamlines)
+            # Use original streamlines - camera handles view
+            subject_colors = np.tile(subject_color, (len(subject_streamlines), 1))
+            try:
+                subject_actor = actor.line(subject_streamlines, colors=subject_colors, opacity=0.05)
+                scene.add(subject_actor)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    total_points = sum(len(sl) for sl in subject_streamlines)
+                    logger.exception(
+                        "VTK memory allocation failed for shape similarity subject actor (likely std::bad_alloc). "
+                        "Subject has %d streamlines with %d total points. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        len(subject_streamlines),
+                        total_points,
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    if brain_actor is not None:
+                        del brain_actor
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Add atlas tract with atlas color (single color for all streamlines)
+            # Use original streamlines - camera handles view
+            atlas_colors = np.tile(atlas_color, (len(atlas_streamlines), 1))
+            try:
+                atlas_actor = actor.line(atlas_streamlines, colors=atlas_colors, opacity=0.05)
+                scene.add(atlas_actor)
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    total_points = sum(len(sl) for sl in atlas_streamlines)
+                    logger.exception(
+                        "VTK memory allocation failed for shape similarity atlas actor (likely std::bad_alloc). "
+                        "Atlas has %d streamlines with %d total points. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        len(atlas_streamlines),
+                        total_points,
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    if subject_actor is not None:
+                        del subject_actor
+                    if brain_actor is not None:
+                        del brain_actor
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Set camera position for anatomical view
+            # Use combined bbox of both tracts for camera distance
+            # Calculate combined bbox using utility function
+            bbox_size = calculate_combined_bbox_size(subject_streamlines, atlas_streamlines)
+
+            # Use helper method to set camera
+            self._set_anatomical_camera(
+                scene,
+                centroid,
+                view_name,
+                bbox_size=bbox_size,
+            )
+
+            # Record the scene (this can also fail with std::bad_alloc)
+            try:
+                window.record(
+                    scene=scene,
+                    out_path=str(output_image),
+                    size=figure_size,
+                )
+                generated_views[view_name] = output_image
+            except RuntimeError as e:
+                # Catch std::bad_alloc and other VTK errors during rendering
+                error_msg = str(e).lower()
+                if "bad_alloc" in error_msg or "memory" in error_msg or "allocation" in error_msg:
+                    logger.exception(
+                        "VTK memory allocation failed during rendering for view %s (likely std::bad_alloc). "
+                        "Subject has %d streamlines, atlas has %d streamlines. "
+                        "Try reducing image resolution (figure_size) or processing with n_jobs=1.",
+                        view_name,
+                        len(subject_streamlines),
+                        len(atlas_streamlines),
+                    )
+                    # Clean up and skip this view
+                    scene.clear()
+                    del subject_actor, atlas_actor
+                    if show_glass_brain:
+                        del brain_actor
+                    del scene
+                    gc.collect()
+                    continue
+                raise
+
+            # Explicitly clean up scene and actors to free memory
+            # VTK/FURY objects can hold circular references, so explicit cleanup is critical
+            scene.clear()
+            del subject_actor, atlas_actor
+            if show_glass_brain:
+                del brain_actor
+            del scene
+
+            # Force garbage collection between views to free memory
+            # This is critical for large tractograms to prevent OOM kills
+            gc.collect()
+
+            generated_views[view_name] = output_image
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to visualize shape similarity: {e}",
+        ) from e
+    else:
+        return generated_views
+```
+
+### weighted_afq
+
+```
+weighted_afq(
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    metric_file: str | Path,
+) -> ndarray
+```
+
+Calculate weighted AFQ profile for tractography.
+
+##### Parameters
+
+tract_file : str | Path Path to the tractography file. atlas_file : str | Path Path to the atlas tractography file. metric_file : str | Path Path to the metric image file.
+
+##### Returns
+
+np.ndarray The AFQ profile array.
+
+##### Raises
+
+FileNotFoundError If any required file is not found. InvalidInputError If clustering fails or no centroids are found. TractographyVisualizationError If processing fails.
+
+Source code in `src/pytractoviz/viz.py`
+
+```
+def weighted_afq(
+    self,
+    tract_file: str | Path,
+    atlas_file: str | Path,
+    metric_file: str | Path,
+) -> np.ndarray:
+    """Calculate weighted AFQ profile for tractography.
+
+    Parameters
+    ----------
+    tract_file : str | Path
+        Path to the tractography file.
+    atlas_file : str | Path
+        Path to the atlas tractography file.
+    metric_file : str | Path
+        Path to the metric image file.
+
+    Returns
+    -------
+    np.ndarray
+        The AFQ profile array.
+
+    Raises
+    ------
+    FileNotFoundError
+        If any required file is not found.
+    InvalidInputError
+        If clustering fails or no centroids are found.
+    TractographyVisualizationError
+        If processing fails.
+    """
+    try:
+        atlas_tract = load_trk(str(atlas_file), "same", bbox_valid_check=False)
+        tract = load_trk(str(tract_file), "same", bbox_valid_check=False)
+
+        # Check if tract is empty before processing
+        if not tract.streamlines or len(tract.streamlines) == 0:
+            raise InvalidInputError(
+                f"Tract file {tract_file} is empty (0 streamlines). Cannot calculate AFQ profile.",
+            )
+
+        # Check if atlas tract is empty
+        if not atlas_tract.streamlines or len(atlas_tract.streamlines) == 0:
+            raise InvalidInputError(
+                f"Atlas tract file {atlas_file} is empty (0 streamlines). Cannot calculate AFQ profile.",
+            )
+
+        metric_img = nib.load(str(metric_file))
+        metric = metric_img.get_fdata()  # type: ignore[attr-defined]
+
+        feature = ResampleFeature(nb_points=self.afq_resample_points)
+        qb_metric = AveragePointwiseEuclideanMetric(feature)
+        qb = QuickBundles(threshold=np.inf, metric=qb_metric)
+        cluster_tract = qb.cluster(atlas_tract.streamlines)
+
+        if len(cluster_tract.centroids) == 0:
+            raise InvalidInputError(
+                "No centroids found in atlas tractography clustering.",
+            )
+
+        standard_tract = cluster_tract.centroids[0]
+        oriented_tract = orient_by_streamline(tract.streamlines, standard_tract)
+        w_tract = gaussian_weights(oriented_tract)
+        profile = afq_profile(
+            metric,
+            oriented_tract,
+            affine=metric_img.affine,  # type: ignore[attr-defined]
+            weights=w_tract,
+        )
+
+    except TractographyVisualizationError:
+        raise
+    except (OSError, ValueError, RuntimeError, IndexError) as e:
+        raise TractographyVisualizationError(
+            f"Failed to calculate weighted AFQ profile: {e}",
+        ) from e
+    else:
+        return profile
+```
+
+# html
+
+HTML report generation for quality checking.
+
+Functions:
+
+- **`create_quality_check_html`** – Create an interactive HTML quality check report for a single subject.
+- **`create_summary_csv`** – Create a CSV file with summary metrics for all subjects and tracts.
+
+## create_quality_check_html
+
+```
+create_quality_check_html(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str,
+    title: str = "Tractography Quality Check",
+    items_per_page: int = 50,
+) -> None
+```
+
+Create an interactive HTML quality check report for a single subject.
+
+This function generates an HTML file for one subject with search and pagination. Only the first subject in the data is used. Images in the detail view are shown in a fixed order: main tract (sagittal, axial, coronal), atlas tract (sagittal, axial, coronal), CCI plots, AFQ plots, then the rest.
+
+#### Parameters
+
+data : dict Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}} Only the first subject is used. Example: { "sub-001": { "AF_L": { "anatomical_sagittal": "path/to/image.png", "atlas_sagittal": "path/to/atlas.png", ... } } } output_file : str Path where the HTML file will be saved. title : str, optional Title for the HTML report. Default is "Tractography Quality Check". items_per_page : int, optional Number of items to display per page. Default is 50.
+
+#### Notes
+
+The report uses a single subject (first in the data), no tract dropdown, and a fixed image order in the modal: main tract sagittal/axial/coronal, atlas tract sagittal/axial/coronal, CCI plots, AFQ plots, then others.
+
+Source code in `src/pytractoviz/html.py`
+
+```
+def create_quality_check_html(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str,
+    title: str = "Tractography Quality Check",
+    items_per_page: int = 50,
+) -> None:
+    """Create an interactive HTML quality check report for a single subject.
+
+    This function generates an HTML file for one subject with search and
+    pagination. Only the first subject in the data is used. Images in the
+    detail view are shown in a fixed order: main tract (sagittal, axial,
+    coronal), atlas tract (sagittal, axial, coronal), CCI plots, AFQ plots,
+    then the rest.
+
+    Parameters
+    ----------
+    data : dict
+        Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+        Only the first subject is used. Example:
+        {
+            "sub-001": {
+                "AF_L": {
+                    "anatomical_sagittal": "path/to/image.png",
+                    "atlas_sagittal": "path/to/atlas.png",
+                    ...
+                }
+            }
+        }
+    output_file : str
+        Path where the HTML file will be saved.
+    title : str, optional
+        Title for the HTML report. Default is "Tractography Quality Check".
+    items_per_page : int, optional
+        Number of items to display per page. Default is 50.
+
+    Notes
+    -----
+    The report uses a single subject (first in the data), no tract dropdown,
+    and a fixed image order in the modal: main tract sagittal/axial/coronal,
+    atlas tract sagittal/axial/coronal, CCI plots, AFQ plots, then others.
+    """
+    # Convert file paths to relative paths for HTML
+    html_dir = Path(output_file).parent
+    data_processed: dict[str, dict[str, dict[str, str]]] = {}
+    missing_data_info: dict[str, list[dict[str, Any]]] = {}  # Track missing data per subject
+
+    for subject_id, tracts in data.items():
+        data_processed[subject_id] = {}
+        missing_data_info[subject_id] = []
+        for tract_name, media in tracts.items():
+            data_processed[subject_id][tract_name] = {}
+            missing_data_list = []
+
+            for media_type, file_path in media.items():
+                # Extract missing_data (metrics and errors are not used in HTML display)
+                if media_type == "_missing_data":
+                    if isinstance(file_path, list):
+                        missing_data_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            missing_data_list = json.loads(file_path)
+                # Handle numeric scores (like shape_similarity_score)
+                elif isinstance(file_path, (int, float)):
+                    data_processed[subject_id][tract_name][media_type] = str(file_path)
+                elif file_path and os.path.exists(file_path):
+                    # Convert to relative path from HTML file location
+                    try:
+                        rel_path = os.path.relpath(file_path, html_dir)
+                        data_processed[subject_id][tract_name][media_type] = rel_path
+                    except ValueError:
+                        # If paths are on different drives (Windows), use absolute
+                        data_processed[subject_id][tract_name][media_type] = file_path
+                elif file_path:
+                    # Store as-is if it's a string but file doesn't exist (might be a score string)
+                    data_processed[subject_id][tract_name][media_type] = file_path
+
+            # Track missing data for display (after processing all media types for this tract)
+            if missing_data_list:
+                missing_data_info[subject_id].append(
+                    {
+                        "tract": tract_name,
+                        "missing": missing_data_list,
+                    },
+                )
+
+    # Single-subject report: keep only the first subject
+    all_subjects = sorted(data_processed.keys())
+    if not all_subjects:
+        raise ValueError("No subject data provided for HTML report.")
+    first_subject = all_subjects[0]
+    data_processed = {first_subject: data_processed[first_subject]}
+    missing_data_info = {
+        first_subject: missing_data_info.get(first_subject, []),
+    }
+    subjects = [first_subject]
+    tract_names = sorted(data_processed[first_subject].keys())
+
+    # Generate HTML
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }}
+
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }}
+
+        .header h1 {{
+            margin-bottom: 0.5rem;
+        }}
+
+        .header .stats {{
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }}
+
+        .controls {{
+            background: white;
+            padding: 1.5rem;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }}
+
+        .controls-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }}
+
+        .control-group {{
+            display: flex;
+            flex-direction: column;
+        }}
+
+        .control-group label {{
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: #555;
+        }}
+
+        .control-group select,
+        .control-group input {{
+            padding: 0.6rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            transition: border-color 0.3s;
+        }}
+
+        .control-group select:focus,
+        .control-group input:focus {{
+            outline: none;
+            border-color: #667eea;
+        }}
+
+        .pagination {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }}
+
+        .pagination button {{
+            padding: 0.5rem 1rem;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+        }}
+
+        .pagination button:hover:not(:disabled) {{
+            background: #667eea;
+            color: white;
+        }}
+
+        .pagination button:disabled {{
+            opacity: 0.5;
+            cursor: not-allowed;
+        }}
+
+        .pagination .page-info {{
+            padding: 0 1rem;
+            font-weight: 600;
+        }}
+
+        .grid-container {{
+            padding: 2rem;
+            max-width: 1800px;
+            margin: 0 auto;
+        }}
+
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }}
+
+        .item-card {{
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+        }}
+
+        .item-card:hover {{
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }}
+
+        .item-header {{
+            padding: 1rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+
+        .item-header h3 {{
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+            color: #333;
+        }}
+
+        .item-header .tract-name {{
+            font-size: 0.85rem;
+            color: #667eea;
+            font-weight: 600;
+        }}
+
+        .item-media {{
+            position: relative;
+            width: 100%;
+            padding-top: 75%; /* 4:3 aspect ratio */
+            background: #f0f0f0;
+            overflow: hidden;
+        }}
+
+        .item-media img,
+        .item-media video {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: white;
+        }}
+
+        .item-media .media-placeholder {{
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #999;
+            font-size: 0.9rem;
+        }}
+
+        .item-footer {{
+            padding: 0.75rem 1rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }}
+
+        .media-badge {{
+            padding: 0.25rem 0.5rem;
+            background: #e3f2fd;
+            color: #1976d2;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }}
+
+        .score-badge {{
+            padding: 0.5rem 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            text-align: center;
+            display: inline-block;
+            margin: 0.5rem 0;
+        }}
+
+        .comparison-container {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin: 1rem 0;
+        }}
+
+        .comparison-item {{
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 0.5rem;
+            text-align: center;
+        }}
+
+        .comparison-item h5 {{
+            margin-bottom: 0.5rem;
+            color: #555;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+
+        .comparison-item img {{
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+            background: white;
+        }}
+
+        @media (max-width: 768px) {{
+            .comparison-container {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+
+        .modal {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            overflow: auto;
+        }}
+
+        .modal-content {{
+            position: relative;
+            margin: 2% auto;
+            max-width: 90%;
+            max-height: 90vh;
+            background: white;
+            border-radius: 8px;
+            padding: 2rem;
+            overflow-y: auto;
+        }}
+
+        .modal-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e0e0e0;
+        }}
+
+        .modal-header h2 {{
+            color: #333;
+        }}
+
+        .close {{
+            color: #aaa;
+            font-size: 2rem;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }}
+
+        .close:hover {{
+            color: #000;
+        }}
+
+        .modal-media-container {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+        }}
+
+        .modal-media-item {{
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 1rem;
+        }}
+
+        .modal-media-item h4 {{
+            margin-bottom: 0.5rem;
+            color: #555;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.5px;
+        }}
+
+        .modal-media-item img,
+        .modal-media-item video {{
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+            background: white;
+        }}
+
+        .no-results {{
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #999;
+        }}
+
+        .no-results h3 {{
+            margin-bottom: 0.5rem;
+            color: #666;
+        }}
+
+        .tabs {{
+            background: white;
+            padding: 0;
+            margin: 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 99;
+        }}
+
+        .tab-buttons {{
+            display: flex;
+            border-bottom: 2px solid #e0e0e0;
+            background: white;
+        }}
+
+        .tab-button {{
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }}
+
+        .tab-button:hover {{
+            background: #f8f9fa;
+            color: #333;
+        }}
+
+        .tab-button.active {{
+            color: #667eea;
+            border-bottom-color: #667eea;
+            background: white;
+        }}
+
+        .tab-content {{
+            display: none;
+        }}
+
+        .tab-content.active {{
+            display: block;
+        }}
+
+        .summary-section {{
+            background: white;
+            padding: 2rem;
+            margin: 2rem auto;
+            max-width: 1800px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+
+        .summary-section h2 {{
+            margin-bottom: 1.5rem;
+            color: #333;
+            font-size: 1.5rem;
+        }}
+
+        .summary-table-container {{
+            overflow-x: auto;
+            width: 100%;
+        }}
+
+        .summary-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            min-width: 1000px;
+        }}
+
+        .summary-table th,
+        .summary-table td {{
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+
+        .summary-table th {{
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }}
+
+        .summary-table tr:hover {{
+            background: #f8f9fa;
+        }}
+
+        .summary-table .metric-value {{
+            font-weight: 600;
+            color: #667eea;
+        }}
+
+        .summary-table .error-cell {{
+            color: #d32f2f;
+            font-size: 0.85rem;
+            max-width: 300px;
+            word-wrap: break-word;
+        }}
+
+        .summary-table .missing-cell {{
+            color: #f57c00;
+            font-size: 0.85rem;
+            max-width: 300px;
+            word-wrap: break-word;
+        }}
+
+        .summary-table .no-data {{
+            color: #999;
+            font-style: italic;
+        }}
+
+        @media (max-width: 768px) {{
+            .grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .controls-grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .modal-content {{
+                max-width: 95%;
+                padding: 1rem;
+            }}
+
+            .modal-media-container {{
+                grid-template-columns: 1fr;
+            }}
+
+            .tab-button {{
+                padding: 0.75rem 1rem;
+                font-size: 0.9rem;
+            }}
+
+            .summary-table {{
+                font-size: 0.8rem;
+            }}
+
+            .summary-table th,
+            .summary-table td {{
+                padding: 0.5rem;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{title}</h1>
+        <div class="stats">
+            <span id="total-items">{len(tract_names)} tract{"s" if len(tract_names) != 1 else ""}</span> |
+            <span id="filtered-count">Showing all items</span>
+        </div>
+    </div>
+
+    {
+        "".join(
+            f'''
+    <div class="missing-data-alert" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem 1.5rem; margin: 1rem 2rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem 0; color: #856404; font-size: 1.1rem;">⚠️ Missing Data</h3>
+        <p style="margin: 0 0 0.5rem 0; color: #856404;">The following tract(s) have missing data:</p>
+        <ul style="margin: 0; padding-left: 1.5rem; color: #856404;">
+            {"".join(f"<li><strong>{item['tract']}</strong>: {'; '.join(str(m) for m in item['missing'])}</li>" for item in missing_data_info[subject_id])}
+        </ul>
+    </div>
+    '''
+            for subject_id in subjects
+            if missing_data_info.get(subject_id)
+        )
+    }
+
+    <div class="controls">
+        <div class="controls-grid">
+            <div class="control-group">
+                <label for="search">Search</label>
+                <input type="text" id="search" placeholder="Search tract...">
+            </div>
+        </div>
+        <div class="pagination">
+            <button id="prev-page" disabled>Previous</button>
+            <span class="page-info">
+                Page <span id="current-page">1</span> of <span id="total-pages">1</span>
+            </span>
+            <button id="next-page">Next</button>
+        </div>
+    </div>
+
+    <div id="visualizations-tab" class="tab-content active">
+        <div class="grid-container">
+            <div class="grid" id="items-grid"></div>
+            <div class="no-results" id="no-results" style="display: none;">
+                <h3>No items found</h3>
+                <p>Try adjusting your filters or search terms</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title"></h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-media-container" id="modal-media"></div>
+        </div>
+    </div>
+
+    <script>
+        const data = {json.dumps(data_processed)};
+        const itemsPerPage = {items_per_page};
+
+        let currentPage = 1;
+        let filteredData = [];
+
+        function getMediaType(filePath) {{
+            if (!filePath) return null;
+            // Check if it's a numeric score (for shape_similarity_score)
+            if (typeof filePath === 'number' || (!isNaN(parseFloat(filePath)) && isFinite(filePath))) {{
+                return 'score';
+            }}
+            const ext = filePath.split('.').pop().toLowerCase();
+            if (['gif'].includes(ext)) return 'gif';
+            if (['mp4', 'webm', 'ogg'].includes(ext)) return 'video';
+            if (['png', 'jpg', 'jpeg', 'svg', 'webp'].includes(ext)) return 'image';
+            return 'image';
+        }}
+
+        function isComparisonType(mediaType) {{
+            return ['before_after_cci', 'atlas_comparison', 'shape_similarity_image'].includes(mediaType);
+        }}
+
+        // Fixed display order: main sagittal, atlas sagittal, main axial, atlas axial, main coronal, atlas coronal, CCI, AFQ, rest
+        const MEDIA_DISPLAY_ORDER = [
+            'anatomical_sagittal', 'atlas_sagittal', 'anatomical_axial', 'atlas_axial', 'anatomical_coronal', 'atlas_coronal',
+            'cci_histogram', 'before_cci_sagittal', 'after_cci_sagittal', 'before_cci_axial', 'after_cci_axial', 'before_cci_coronal', 'after_cci_coronal',
+            'atlas_comparison', 'shape_similarity_image'
+        ];
+        function getMediaSortKey(type) {{
+            const idx = MEDIA_DISPLAY_ORDER.indexOf(type);
+            if (idx >= 0) return idx;
+            if (type.startsWith('afq_')) return 100;
+            return 200;
+        }}
+
+        function flattenData() {{
+            const items = [];
+            for (const [subject, tracts] of Object.entries(data)) {{
+                for (const [tract, media] of Object.entries(tracts)) {{
+                    items.push({{ subject, tract, media }});
+                }}
+            }}
+            return items;
+        }}
+
+        function filterData() {{
+            const searchTerm = document.getElementById('search').value.toLowerCase();
+            filteredData = flattenData().filter(item => {{
+                return !searchTerm || item.tract.toLowerCase().includes(searchTerm);
+            }});
+
+            currentPage = 1;
+            renderItems();
+            updatePagination();
+        }}
+
+        function renderItems() {{
+            const grid = document.getElementById('items-grid');
+            const noResults = document.getElementById('no-results');
+            const filteredCount = document.getElementById('filtered-count');
+
+            if (filteredData.length === 0) {{
+                grid.style.display = 'none';
+                noResults.style.display = 'block';
+                filteredCount.textContent = 'No items found';
+                return;
+            }}
+
+            grid.style.display = 'grid';
+            noResults.style.display = 'none';
+            filteredCount.textContent = `Showing ${{filteredData.length}} item${{filteredData.length !== 1 ? 's' : ''}}`;
+
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pageItems = filteredData.slice(start, end);
+
+            grid.innerHTML = pageItems.map(item => {{
+                const mediaTypes = Object.keys(item.media);
+                // Find primary media (skip scores)
+                const primaryMedia = Object.entries(item.media).find(([type, path]) => {{
+                    const mt = getMediaType(path);
+                    return mt !== 'score' && mt !== null;
+                }});
+                const primaryMediaPath = primaryMedia ? primaryMedia[1] : null;
+                const mediaType = primaryMediaPath ? getMediaType(primaryMediaPath) : null;
+
+                // Find scores to display
+                const scores = Object.entries(item.media)
+                    .filter(([type, path]) => getMediaType(path) === 'score')
+                    .map(([type, path]) => ({{
+                        type: type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase()),
+                        value: parseFloat(path)
+                    }}));
+
+                let mediaHtml = '<div class="media-placeholder">No media available</div>';
+                if (primaryMediaPath) {{
+                    if (mediaType === 'video') {{
+                        mediaHtml = `<video src="${{primaryMediaPath}}" muted loop></video>`;
+                    }} else if (mediaType === 'gif' || mediaType === 'image') {{
+                        mediaHtml = `<img src="${{primaryMediaPath}}" alt="${{item.tract}}" loading="lazy">`;
+                    }}
+                }} else if (scores.length > 0) {{
+                    // If only scores available, display them
+                    mediaHtml = scores.map(score =>
+                        `<div class="score-badge" style="margin: 0.5rem;">${{score.type}}: ${{score.value.toFixed(3)}}</div>`
+                    ).join('');
+                }}
+
+                const badges = mediaTypes.map(type =>
+                    `<span class="media-badge">${{type}}</span>`
+                ).join('');
+
+                return `
+                    <div class="item-card" onclick="openModal('${{item.subject}}', '${{item.tract}}')">
+                        <div class="item-header">
+                            <div class="tract-name">${{item.tract}}</div>
+                        </div>
+                        <div class="item-media">
+                            ${{mediaHtml}}
+                        </div>
+                        <div class="item-footer">
+                            ${{badges}}
+                        </div>
+                    </div>
+                `;
+            }}).join('');
+        }}
+
+        function updatePagination() {{
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            document.getElementById('current-page').textContent = currentPage;
+            document.getElementById('total-pages').textContent = totalPages || 1;
+            document.getElementById('prev-page').disabled = currentPage === 1;
+            document.getElementById('next-page').disabled = currentPage >= totalPages;
+        }}
+
+        function openModal(subject, tract) {{
+            const item = filteredData.find(i => i.subject === subject && i.tract === tract);
+            if (!item) return;
+
+            document.getElementById('modal-title').textContent = tract;
+            const modalMedia = document.getElementById('modal-media');
+
+            // Separate scores and media; merge media + comparisons and sort by fixed display order
+            const scores = [];
+            const mediaItems = [];
+
+            Object.entries(item.media).forEach(([type, path]) => {{
+                if (!path) return;
+                const mediaType = getMediaType(path);
+
+                if (mediaType === 'score') {{
+                    scores.push({{ type, value: parseFloat(path) }});
+                }} else {{
+                    mediaItems.push({{ type, path, isComparison: isComparisonType(type) }});
+                }}
+            }});
+
+            mediaItems.sort((a, b) => {{
+                const ka = getMediaSortKey(a.type);
+                const kb = getMediaSortKey(b.type);
+                if (ka !== kb) return ka - kb;
+                return (a.type || '').localeCompare(b.type || '');
+            }});
+
+            function renderMediaItem(entry) {{
+                const mediaType = getMediaType(entry.path);
+                let mediaHtml = '';
+                if (mediaType === 'video') {{
+                    mediaHtml = `<video src="${{entry.path}}" controls autoplay></video>`;
+                }} else if (mediaType === 'gif' || mediaType === 'image') {{
+                    mediaHtml = `<img src="${{entry.path}}" alt="${{entry.type}}">`;
+                }}
+                const label = entry.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+
+                if (entry.type === 'before_after_cci') {{
+                    return `
+                        <div class="modal-media-item">
+                            <h4>${{label}}</h4>
+                            ${{mediaHtml}}
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; text-align: center;">
+                                <div style="font-size: 0.85rem; color: #555; font-weight: 600;">Before CCI</div>
+                                <div style="font-size: 0.85rem; color: #555; font-weight: 600;">After CCI</div>
+                            </div>
+                        </div>
+                    `;
+                }}
+                if (entry.type === 'atlas_comparison') {{
+                    const subjectImg = item.media.subject_image || item.media.atlas_comparison_subject;
+                    const atlasImg = item.media.atlas_image || item.media.atlas_comparison_atlas;
+                    if (subjectImg && atlasImg) {{
+                        const st = getMediaType(subjectImg);
+                        const at = getMediaType(atlasImg);
+                        const subjectHtml = (st === 'image' || st === 'gif') ? `<img src="${{subjectImg}}" alt="Subject">` : `<img src="${{entry.path}}" alt="Subject">`;
+                        const atlasHtml = (at === 'image' || at === 'gif') ? `<img src="${{atlasImg}}" alt="Atlas">` : `<img src="${{entry.path}}" alt="Atlas">`;
+                        return `
+                            <div class="modal-media-item">
+                                <h4>${{label}}</h4>
+                                <div class="comparison-container">
+                                    <div class="comparison-item"><h5>Subject</h5>${{subjectHtml}}</div>
+                                    <div class="comparison-item"><h5>Atlas</h5>${{atlasHtml}}</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                }}
+                if (entry.type === 'shape_similarity_image') {{
+                    const subjectImg = item.media.shape_similarity_subject;
+                    const atlasImg = item.media.shape_similarity_atlas;
+                    if (subjectImg && atlasImg) {{
+                        const st = getMediaType(subjectImg);
+                        const at = getMediaType(atlasImg);
+                        const subjectHtml = (st === 'image' || st === 'gif') ? `<img src="${{subjectImg}}" alt="Subject">` : `<img src="${{entry.path}}" alt="Subject">`;
+                        const atlasHtml = (at === 'image' || at === 'gif') ? `<img src="${{atlasImg}}" alt="Atlas">` : `<img src="${{entry.path}}" alt="Atlas">`;
+                        return `
+                            <div class="modal-media-item">
+                                <h4>${{label}}</h4>
+                                <div class="comparison-container">
+                                    <div class="comparison-item"><h5>Subject</h5>${{subjectHtml}}</div>
+                                    <div class="comparison-item"><h5>Atlas</h5>${{atlasHtml}}</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                }}
+                return `
+                    <div class="modal-media-item">
+                        <h4>${{label}}</h4>
+                        ${{mediaHtml}}
+                    </div>
+                `;
+            }}
+
+            let html = '';
+
+            if (scores.length > 0) {{
+                html += scores.map(score => `
+                    <div class="modal-media-item">
+                        <h4>${{score.type.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</h4>
+                        <div class="score-badge">${{score.value.toFixed(3)}}</div>
+                    </div>
+                `).join('');
+            }}
+
+            html += mediaItems.map(renderMediaItem).join('');
+
+            modalMedia.innerHTML = html;
+
+            document.getElementById('modal').style.display = 'block';
+        }}
+
+        function closeModal() {{
+            document.getElementById('modal').style.display = 'none';
+        }}
+
+        // Event listeners
+        document.getElementById('search').addEventListener('input', filterData);
+        document.getElementById('prev-page').addEventListener('click', () => {{
+            if (currentPage > 1) {{
+                currentPage--;
+                renderItems();
+                updatePagination();
+                window.scrollTo({{ top: 0, behavior: 'smooth' }});
+            }}
+        }});
+        document.getElementById('next-page').addEventListener('click', () => {{
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            if (currentPage < totalPages) {{
+                currentPage++;
+                renderItems();
+                updatePagination();
+                window.scrollTo({{ top: 0, behavior: 'smooth' }});
+            }}
+        }});
+        document.querySelector('.close').addEventListener('click', closeModal);
+        document.getElementById('modal').addEventListener('click', (e) => {{
+            if (e.target.id === 'modal') closeModal();
+        }});
+
+        // Initialize
+        filterData();
+    </script>
+</body>
+</html>"""
+
+    # Write HTML file
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html_content)
+```
+
+## create_summary_csv
+
+```
+create_summary_csv(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str | Path,
+) -> None
+```
+
+Create a CSV file with summary metrics for all subjects and tracts.
+
+#### Parameters
+
+data : dict Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}} Same format as create_quality_check_html. output_file : str | Path Path where the CSV file will be saved.
+
+#### Notes
+
+The CSV includes the following columns:
+
+- Subject: Subject ID
+- Tract: Tract name
+- Initial Streamlines: Count before CCI filtering
+- After CCI Filter: Count after CCI filtering
+- CCI Mean: Mean CCI value
+- CCI Median: Median CCI value
+- Shape Similarity: Shape similarity score
+- Errors: List of errors (semicolon-separated)
+- Missing Data: List of missing data items (semicolon-separated)
+
+Source code in `src/pytractoviz/html.py`
+
+```
+def create_summary_csv(
+    data: dict[str, dict[str, dict[str, str]]],
+    output_file: str | Path,
+) -> None:
+    """Create a CSV file with summary metrics for all subjects and tracts.
+
+    Parameters
+    ----------
+    data : dict
+        Nested dictionary structure: {subject_id: {tract_name: {media_type: file_path}}}
+        Same format as create_quality_check_html.
+    output_file : str | Path
+        Path where the CSV file will be saved.
+
+    Notes
+    -----
+    The CSV includes the following columns:
+    - Subject: Subject ID
+    - Tract: Tract name
+    - Initial Streamlines: Count before CCI filtering
+    - After CCI Filter: Count after CCI filtering
+    - CCI Mean: Mean CCI value
+    - CCI Median: Median CCI value
+    - Shape Similarity: Shape similarity score
+    - Errors: List of errors (semicolon-separated)
+    - Missing Data: List of missing data items (semicolon-separated)
+    """
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Collect summary data from all subjects
+    summary_rows: list[dict[str, Any]] = []
+
+    for subject_id, tracts in data.items():
+        for tract_name, media in tracts.items():
+            metrics_dict = {}
+            errors_list = []
+            missing_data_list = []
+
+            for media_type, file_path in media.items():
+                # Extract metrics, errors, and missing_data
+                if media_type == "_metrics":
+                    if isinstance(file_path, dict):
+                        metrics_dict = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            metrics_dict = json.loads(file_path)
+                elif media_type == "_errors":
+                    if isinstance(file_path, list):
+                        errors_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            errors_list = json.loads(file_path)
+                elif media_type == "_missing_data":
+                    if isinstance(file_path, list):
+                        missing_data_list = file_path
+                    elif isinstance(file_path, str):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            missing_data_list = json.loads(file_path)
+
+            # Create row for this subject/tract combination
+            row = {
+                "Subject": subject_id,
+                "Tract": tract_name,
+                "Initial Streamlines": metrics_dict.get("initial_streamline_count", ""),
+                "After CCI Filter": metrics_dict.get("cci_after_filter_count", ""),
+                "CCI Mean": metrics_dict.get("cci_mean", ""),
+                "CCI Median": metrics_dict.get("cci_median", ""),
+                "Shape Similarity": metrics_dict.get("shape_similarity_score", ""),
+                "Errors": "; ".join(str(e) for e in errors_list) if errors_list else "",
+                "Missing Data": "; ".join(str(m) for m in missing_data_list) if missing_data_list else "",
+            }
+            summary_rows.append(row)
+
+    # Write CSV file
+    if summary_rows:
+        fieldnames = [
+            "Subject",
+            "Tract",
+            "Initial Streamlines",
+            "After CCI Filter",
+            "CCI Mean",
+            "CCI Median",
+            "Shape Similarity",
+            "Errors",
+            "Missing Data",
+        ]
+
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(summary_rows)
+```

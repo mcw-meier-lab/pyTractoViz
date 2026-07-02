@@ -1,0 +1,13 @@
+# pyTractoViz
+
+> Python tools for diffusion tractography visualization
+
+## Usage
+
+- [Overview](https://mcw-meier-lab.github.io/pytractoviz/index.md)
+- [Usage](https://mcw-meier-lab.github.io/pytractoviz/usage/index.md)
+
+## API
+
+- [API reference](https://mcw-meier-lab.github.io/pytractoviz/reference/api/index.md)
+
