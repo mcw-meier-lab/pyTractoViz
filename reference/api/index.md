@@ -6419,7 +6419,7 @@ prevent resource contention.
 max_memory_mb : float | None, optional Maximum memory limit in MB for the process. If set, the process will be killed by the OS if it exceeds this limit. This helps prevent OOM kills by setting a hard limit. Default is None (no limit).
 
 ```
-Note: This uses resource.setrlimit() which sets a virtual memory limit.
+Note: On Unix platforms, a virtual memory limit is applied when supported.
 Once set, the limit cannot be increased (only decreased).
 ```
 
@@ -9360,8 +9360,9 @@ def run_quality_check_workflow(
     vdisplay = None
     if os.environ.get("XVFB", "").lower() in ("1", "true", "yes"):
         logger.info("Initializing XVFB for headless rendering")
-        vdisplay = Xvfb()
-        vdisplay.start()
+        vdisplay = _start_virtual_display()
+        if vdisplay is None:
+            logger.warning("XVFB requested but virtual display is not available on this platform")
 
     # Get output directory
     if output_dir is None:
@@ -9861,7 +9862,7 @@ def run_quality_check_workflow(
     # Stop XVFB if it was started
     if vdisplay is not None:
         logger.info("Stopping XVFB")
-        vdisplay.stop()
+        _stop_virtual_display(vdisplay)
     return results
 ```
 
