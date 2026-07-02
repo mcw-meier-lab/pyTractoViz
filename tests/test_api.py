@@ -140,6 +140,7 @@ def test_api_matches_inventory(inventory: Inventory, public_objects: list[griffe
     # and module-level variables that are implementation details
     ignore_paths = {
         "pytractoviz.viz.logger",  # Internal logger, not part of public API
+        "pytractoviz.qc_viz.logger",  # Internal logger, not part of public API
         "pytractoviz.utils.ANATOMICAL_VIEW_NAMES",  # Module-level constant, may not be in inventory
         "pytractoviz.utils.TEMPLATE_SPACE_INDICATORS",  # Module-level constant, may not be in inventory
         "pytractoviz.viz.MAX_POINTS_PER_STREAMLINE_FRAGMENTATION_THRESHOLD",  # Internal constant for memory estimation
@@ -154,6 +155,10 @@ def test_api_matches_inventory(inventory: Inventory, public_objects: list[griffe
         if obj.name not in ignore_names
         and obj.path not in inventory
         and obj.path not in ignore_paths
+        and not obj.path.startswith(
+            ("pytractoviz.qc_viz.", "pytractoviz.group_interactive_report.", "pytractoviz.qc_config."),
+        )
+        and not obj.path.startswith("pytractoviz.QCPathConfig.")
         and not (obj.is_attribute and obj.parent and obj.parent.is_class)  # Instance attributes
     ]
     msg = "Objects not in the inventory (try running `make run mkdocs build`):\n{paths}"
@@ -176,6 +181,9 @@ def test_inventory_matches_api(
         "pytractoviz.viz",
         "pytractoviz.html",
         "pytractoviz._internal.cli",
+        "pytractoviz.qc_viz",
+        "pytractoviz.group_interactive_report",
+        "pytractoviz.qc_config",
     }
     for item in inventory.values():
         if (

@@ -148,17 +148,17 @@ class TestCollectTractFiles:
         assert tract_file in result
 
 
-class TestQcInteractiveCommand:
-    """Test qc-interactive CLI command."""
+class TestInteractiveCommand:
+    """Test interactive CLI command."""
 
     @patch("pytractoviz._internal.cli.TractographyVisualizer")
-    def test_qc_interactive_success_single_file(
+    def test_interactive_success_single_file(
         self,
         mock_visualizer_class: Mock,
         tmp_path: Path,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        """Test qc-interactive with single file."""
+        """Test interactive with single file."""
         tract_file = tmp_path / "tract.trk"
         tract_file.touch()
         ref_file = tmp_path / "t1w.nii.gz"
@@ -167,7 +167,7 @@ class TestQcInteractiveCommand:
         mock_visualizer = Mock()
         mock_visualizer_class.return_value = mock_visualizer
 
-        result = main(["qc-interactive", str(tract_file), "--ref", str(ref_file)])
+        result = main(["interactive", str(tract_file), "--ref", str(ref_file)])
 
         assert result == 0
         # CLI converts ref_img string to Path, so check it was called with Path
@@ -179,12 +179,12 @@ class TestQcInteractiveCommand:
         assert "Loading:" in captured.out
 
     @patch("pytractoviz._internal.cli.TractographyVisualizer")
-    def test_qc_interactive_success_multiple_files(
+    def test_interactive_success_multiple_files(
         self,
         mock_visualizer_class: Mock,
         tmp_path: Path,
     ) -> None:
-        """Test qc-interactive with multiple files."""
+        """Test interactive with multiple files."""
         tract1 = tmp_path / "tract1.trk"
         tract2 = tmp_path / "tract2.trk"
         ref_file = tmp_path / "t1w.nii.gz"
@@ -195,18 +195,18 @@ class TestQcInteractiveCommand:
         mock_visualizer = Mock()
         mock_visualizer_class.return_value = mock_visualizer
 
-        result = main(["qc-interactive", str(tract1), str(tract2), "--ref", str(ref_file)])
+        result = main(["interactive", str(tract1), str(tract2), "--ref", str(ref_file)])
 
         assert result == 0
         assert mock_visualizer.view_tract_interactive.call_count == 2
 
     @patch("pytractoviz._internal.cli.TractographyVisualizer")
-    def test_qc_interactive_with_skip(
+    def test_interactive_with_skip(
         self,
         mock_visualizer_class: Mock,
         tmp_path: Path,
     ) -> None:
-        """Test qc-interactive with --skip option."""
+        """Test interactive with --skip option."""
         tract1 = tmp_path / "tract1.trk"
         tract2 = tmp_path / "tract2.trk"
         ref_file = tmp_path / "t1w.nii.gz"
@@ -217,27 +217,27 @@ class TestQcInteractiveCommand:
         mock_visualizer = Mock()
         mock_visualizer_class.return_value = mock_visualizer
 
-        result = main(["qc-interactive", str(tract1), str(tract2), "--ref", str(ref_file), "--skip", "1"])
+        result = main(["interactive", str(tract1), str(tract2), "--ref", str(ref_file), "--skip", "1"])
 
         assert result == 0
         assert mock_visualizer.view_tract_interactive.call_count == 1
 
-    def test_qc_interactive_missing_ref(self, tmp_path: Path) -> None:
-        """Test qc-interactive without --ref argument."""
+    def test_interactive_missing_ref(self, tmp_path: Path) -> None:
+        """Test interactive without --ref argument."""
         tract_file = tmp_path / "tract.trk"
         tract_file.touch()
 
         with pytest.raises(SystemExit):
-            main(["qc-interactive", str(tract_file)])
+            main(["interactive", str(tract_file)])
 
-    def test_qc_interactive_no_files_found(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """Test qc-interactive when no .trk files found."""
+    def test_interactive_no_files_found(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """Test interactive when no .trk files found."""
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
         ref_file = tmp_path / "t1w.nii.gz"
         ref_file.touch()
 
-        result = main(["qc-interactive", str(empty_dir), "--ref", str(ref_file)])
+        result = main(["interactive", str(empty_dir), "--ref", str(ref_file)])
 
         assert result == 1
         captured = capsys.readouterr()
@@ -245,14 +245,14 @@ class TestQcInteractiveCommand:
 
     @patch("pytractoviz._internal.cli.TractographyVisualizer")
     @patch("builtins.input", return_value="y")
-    def test_qc_interactive_error_continue(
+    def test_interactive_error_continue(
         self,
         mock_input: Mock,
         mock_visualizer_class: Mock,
         tmp_path: Path,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        """Test qc-interactive continues on error when user confirms."""
+        """Test interactive continues on error when user confirms."""
         tract1 = tmp_path / "tract1.trk"
         tract2 = tmp_path / "tract2.trk"
         ref_file = tmp_path / "t1w.nii.gz"
@@ -268,7 +268,7 @@ class TestQcInteractiveCommand:
             None,
         ]
 
-        result = main(["qc-interactive", str(tract1), str(tract2), "--ref", str(ref_file)])
+        result = main(["interactive", str(tract1), str(tract2), "--ref", str(ref_file)])
 
         assert result == 0
         assert mock_visualizer.view_tract_interactive.call_count == 2
@@ -277,13 +277,13 @@ class TestQcInteractiveCommand:
         mock_input.assert_called_once()
 
     @patch("pytractoviz._internal.cli.TractographyVisualizer")
-    def test_qc_interactive_keyboard_interrupt(
+    def test_interactive_keyboard_interrupt(
         self,
         mock_visualizer_class: Mock,
         tmp_path: Path,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        """Test qc-interactive handles KeyboardInterrupt."""
+        """Test interactive handles KeyboardInterrupt."""
         tract_file = tmp_path / "tract.trk"
         ref_file = tmp_path / "t1w.nii.gz"
         tract_file.touch()
@@ -293,7 +293,7 @@ class TestQcInteractiveCommand:
         mock_visualizer_class.return_value = mock_visualizer
         mock_visualizer.view_tract_interactive.side_effect = KeyboardInterrupt()
 
-        result = main(["qc-interactive", str(tract_file), "--ref", str(ref_file)])
+        result = main(["interactive", str(tract_file), "--ref", str(ref_file)])
 
         assert result == 130
         captured = capsys.readouterr()

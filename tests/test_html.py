@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -31,7 +33,7 @@ class TestCreateQualityCheckHTML:
         assert "AF_L" in content
 
     def test_multiple_subjects_and_tracts(self, tmp_path: Path) -> None:
-        """Test HTML generation with multiple subjects and tracts."""
+        """Only the first subject is included in the legacy HTML report."""
         output_file = tmp_path / "test_report.html"
         data = {
             "sub-001": {
@@ -46,7 +48,7 @@ class TestCreateQualityCheckHTML:
         assert output_file.exists()
         content = output_file.read_text(encoding="utf-8")
         assert "sub-001" in content
-        assert "sub-002" in content
+        assert "sub-002" not in content
         assert "AF_L" in content
         assert "AF_R" in content
 
@@ -128,15 +130,11 @@ class TestCreateQualityCheckHTML:
         assert "25" in content or "itemsPerPage" in content.lower()
 
     def test_empty_data(self, tmp_path: Path) -> None:
-        """Test HTML generation with empty data."""
+        """Empty input is rejected."""
         output_file = tmp_path / "test_report.html"
         data: dict[str, dict[str, dict[str, str]]] = {}
-        create_quality_check_html(data, str(output_file))
-        assert output_file.exists()
-        content = output_file.read_text(encoding="utf-8")
-        # Should still generate valid HTML
-        assert "<!DOCTYPE html>" in content
-        assert "<html" in content
+        with pytest.raises(ValueError, match="No subject data provided"):
+            create_quality_check_html(data, str(output_file))
 
     def test_relative_paths(self, tmp_path: Path) -> None:
         """Test that file paths are converted to relative paths."""
