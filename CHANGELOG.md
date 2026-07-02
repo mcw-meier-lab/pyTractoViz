@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## Unreleased
+
+### Features
+
+- Integrate automated QC pipeline (`run`, `html`, `group-html`, `group-interactive` CLI subcommands).
+- Rename `qc-interactive` to `interactive` for the 3D tract viewer.
+- Add `group_interactive_report` module for Plotly-based group comparison HTML.
+- Externalize QC pipeline paths via `QCPathConfig`, CLI flags, and environment variables.
+
 ## [0.5.3](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.5.3) - 2026-03-12
 
 <small>[Compare with 0.5.2](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.5.2...0.5.3)</small>

@@ -52,6 +52,9 @@ ignore = [
 "src/**/cli.py" = [
     "T201",  # Print statement
 ]
+"src/**/report_cli.py" = [
+    "T201",  # Print statement
+]
 "src/*/debug.py" = [
     "T201",  # Print statement
 ]
