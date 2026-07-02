@@ -16,6 +16,7 @@ validation:
 nav:
 - Home:
   - Overview: index.md
+  - Usage: usage.md
   - Changelog: changelog.md
   - Credits: credits.md
   - License: license.md
@@ -130,6 +131,7 @@ plugins:
     sections:
       Usage:
       - index.md
+      - usage.md
       API:
       - reference/api.md
 - git-revision-date-localized:
