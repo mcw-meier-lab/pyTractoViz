@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [0.6.2](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.6.2) - 2026-07-02
+
+<small>[Compare with 0.6.1](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.6.1...0.6.2)</small>
+
 ## [0.6.1](https://github.com/mcw-meier-lab/pyTractoViz/releases/tag/0.6.1) - 2026-07-02
 
 <small>[Compare with 0.6.0](https://github.com/mcw-meier-lab/pyTractoViz/compare/0.6.0...0.6.1)</small>
