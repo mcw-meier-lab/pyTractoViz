@@ -8,7 +8,6 @@ import json
 import logging
 import multiprocessing
 import os
-import resource
 import sys
 import tracemalloc
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -50,6 +49,7 @@ from nibabel.affines import apply_affine
 from scipy.spatial.transform import Rotation
 from xvfbwrapper import Xvfb
 
+from pytractoviz._internal.platform import _get_resource_usage, _set_resource_memory_limit
 from pytractoviz.html import create_quality_check_html, create_summary_csv
 from pytractoviz.utils import (
     ANATOMICAL_VIEW_NAMES,
@@ -128,34 +128,6 @@ DENSE_TRACT_POINT_THRESHOLD = 1000000  # >1M total points triggers dense tract w
 VERY_LONG_STREAMLINE_POINT_THRESHOLD = 50000  # Streamlines with >50k points trigger warning
 LARGE_TRACT_POINT_THRESHOLD = 100000  # >100k total points triggers large tract info message
 MIN_MEMORY_CHECK_MB = 100  # Minimum estimated memory (MB) before checking availability
-
-
-def _get_resource_usage() -> Any | None:
-    """Return the current process resource usage, when supported by the platform."""
-    if sys.platform == "win32":
-        return None
-
-    getrusage = getattr(resource, "getrusage", None)
-    rusage_self = getattr(resource, "RUSAGE_SELF", None)
-    if getrusage is None or rusage_self is None:
-        return None
-
-    return getrusage(rusage_self)
-
-
-def _set_resource_memory_limit(memory_limit_bytes: int) -> bool:
-    """Set the process virtual memory limit, when supported by the platform."""
-    if sys.platform == "win32":
-        return False
-
-    setrlimit = getattr(resource, "setrlimit", None)
-    rlimit_as = getattr(resource, "RLIMIT_AS", None)
-    rlim_infinity = getattr(resource, "RLIM_INFINITY", None)
-    if setrlimit is None or rlimit_as is None or rlim_infinity is None:
-        return False
-
-    setrlimit(rlimit_as, (memory_limit_bytes, rlim_infinity))
-    return True
 
 
 def _log_memory_usage(
@@ -291,8 +263,8 @@ def _log_memory_usage(
 def _set_memory_limit(memory_limit_mb: float | None = None) -> None:
     """Set a hard memory limit for the current process.
 
-    This uses resource.setrlimit() to set a maximum virtual memory (address space)
-    limit. If the process exceeds this limit, it will be killed by the OS.
+    On Unix platforms, this sets a virtual memory (address space) limit when supported.
+    If the process exceeds this limit, it will be killed by the OS.
 
     Parameters
     ----------
@@ -805,7 +777,7 @@ class TractographyVisualizer:
         killed by the OS if it exceeds this limit. This helps prevent OOM kills
         by setting a hard limit. Default is None (no limit).
 
-        Note: This uses resource.setrlimit() which sets a virtual memory limit.
+        Note: On Unix platforms, a virtual memory limit is applied when supported.
         Once set, the limit cannot be increased (only decreased).
     figure_size : tuple[int, int], optional
         Default size for generated static images in pixels. Default is (800, 800).
