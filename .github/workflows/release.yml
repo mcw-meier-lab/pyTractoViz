@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: "3.13"
     - name: Setup uv
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v7
     - name: Prepare release notes
       run: uv tool run git-changelog --release-notes > release-notes.md
     - name: Create release
