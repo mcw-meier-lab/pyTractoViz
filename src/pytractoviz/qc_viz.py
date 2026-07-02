@@ -2436,7 +2436,7 @@ def subject_bundle_key(stem: str) -> str:
     """Extract the short bundle name from a PYAFQ or BIDS-like tract filename stem."""
     s = str(stem)
     if "desc-" not in s:
-        return s.split("_")[-1] if "_" in s else s
+        return s.rsplit("_", 1)[-1] if "_" in s else s
     after_desc = s.split("desc-", 1)[1]
     if "_tractography" in after_desc:
         after_desc = after_desc.split("_tractography")[0].rstrip("_")

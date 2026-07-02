@@ -1698,7 +1698,7 @@ class TractographyVisualizer:
 
                 try:
                     window.record(
-                        scene=scene,  # noqa: F821
+                        scene=scene,  # noqa: F821, RUF100
                         out_path=str(output_image),
                         size=figure_size,
                     )
@@ -1717,20 +1717,20 @@ class TractographyVisualizer:
                             sum(len(sl) for sl in tract_streamlines),
                         )
                         # Clean up and skip this view
-                        scene.clear()  # noqa: F821
+                        scene.clear()  # noqa: F821, RUF100
                         if tract_actor is not None:
                             del tract_actor
-                        del scene  # noqa: F821
+                        del scene  # noqa: F821, RUF100
                         gc.collect()
                         continue
                     raise
 
                 # Explicitly clean up scene and actors to free memory
                 # VTK/FURY objects can hold circular references, so explicit cleanup is critical
-                scene.clear()  # noqa: F821
+                scene.clear()  # noqa: F821, RUF100
                 if tract_actor is not None:
                     del tract_actor
-                del scene  # noqa: F821
+                del scene  # noqa: F821, RUF100
 
                 # Force garbage collection between views to free memory
                 # This is critical for large tractograms to prevent OOM kills
